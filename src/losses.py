@@ -15,11 +15,10 @@ class CharbonnierLoss(nn.Module):
 
 
 class FrequencyLoss(nn.Module):
-    def __init__(self, weight: float = 0.1) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.weight = weight
 
     def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_fft = torch.fft.fft2(prediction.float(), dim=(-2, -1))
         target_fft = torch.fft.fft2(target.float(), dim=(-2, -1))
-        return self.weight * F.l1_loss(torch.abs(pred_fft), torch.abs(target_fft))
+        return F.l1_loss(torch.abs(pred_fft), torch.abs(target_fft))

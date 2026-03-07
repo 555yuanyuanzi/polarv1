@@ -55,6 +55,9 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    checkpoint_path = Path(args.checkpoint)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     dataset = GoProDataset(root_dir=config.data.root_dir, split="test", crop_size=config.data.train_crop_size)
     dataloader = DataLoader(
@@ -73,7 +76,7 @@ def main() -> None:
     scaler = GradScaler(enabled=config.runtime.amp and device.type == "cuda")
 
     load_checkpoint(
-        args.checkpoint,
+        checkpoint_path,
         model=model,
         ema=ema,
         optimizer=optimizer,
@@ -98,7 +101,6 @@ def main() -> None:
 
     print(json.dumps(results, ensure_ascii=True, indent=2))
 
-    checkpoint_path = Path(args.checkpoint)
     output_path = checkpoint_path.parent / f"eval_{checkpoint_path.stem}.json"
     output_path.write_text(json.dumps(results, ensure_ascii=True, indent=2), encoding="utf-8")
 

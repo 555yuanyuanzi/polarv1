@@ -21,7 +21,7 @@ from src.engine.ema import ModelEMA
 from src.engine.optim import build_optimizer, build_scheduler
 from src.engine.trainer import Trainer
 from src.models import PolarFormer
-from src.utils.distributed import cleanup_distributed, init_distributed_mode, is_main_process
+from src.utils.distributed import DistributedEvalSampler, cleanup_distributed, init_distributed_mode, is_main_process
 from src.utils.experiment import create_experiment_dirs, load_experiment_dirs
 from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer, create_wandb_run
 from src.utils.seed import set_seed
@@ -61,22 +61,14 @@ def main() -> None:
 
     resume_path = Path(config.runtime.resume) if config.runtime.resume else None
     if resume_path is not None:
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
         experiment_dirs = load_experiment_dirs(resume_path.resolve().parents[1])
     else:
         experiment_dirs = create_experiment_dirs(config.experiment.output_root, config.experiment.name)
 
     logger = create_logger(experiment_dirs.train_log, is_main=is_main_process(state))
     metrics_writer = JsonlWriter(experiment_dirs.metrics_jsonl)
-    wandb_run = create_wandb_run(
-        enabled=config.logging.wandb,
-        is_main=is_main_process(state),
-        project=config.logging.wandb_project,
-        entity=config.logging.wandb_entity,
-        mode=config.logging.wandb_mode,
-        config=config_to_dict(config),
-        run_name=f"{config.experiment.name}-{experiment_dirs.root.name}",
-        run_dir=experiment_dirs.root,
-    )
     tensorboard_writer = create_tensorboard_writer(
         experiment_dirs.tensorboard,
         enabled=config.logging.tensorboard,
@@ -84,9 +76,6 @@ def main() -> None:
     )
     if is_main_process(state):
         save_resolved_config(config, experiment_dirs.resolved_config)
-        if wandb_run is not None:
-            wandb_run.config.update({"resolved_config_path": str(experiment_dirs.resolved_config)}, allow_val_change=True)
-            wandb_run.config.update({"experiment": config.experiment.name}, allow_val_change=True)
 
     logger.info("Experiment directory: %s", experiment_dirs.root)
     logger.info("Loading datasets from %s", config.data.root_dir)
@@ -103,7 +92,7 @@ def main() -> None:
     )
 
     train_sampler = DistributedSampler(train_dataset, shuffle=True) if state.distributed else None
-    val_sampler = DistributedSampler(val_dataset, shuffle=False) if state.distributed else None
+    val_sampler = DistributedEvalSampler(val_dataset, num_replicas=state.world_size, rank=state.rank) if state.distributed else None
 
     train_loader = DataLoader(
         train_dataset,
@@ -134,6 +123,7 @@ def main() -> None:
     global_step = 0
     best_psnr = float("-inf")
     best_ssim = float("-inf")
+    wandb_run_id = ""
     if resume_path is not None:
         logger.info("Resuming from %s", resume_path)
         resume_state = load_checkpoint(
@@ -149,6 +139,23 @@ def main() -> None:
         global_step = resume_state["global_step"]
         best_psnr = resume_state["best_psnr"]
         best_ssim = resume_state["best_ssim"]
+        wandb_run_id = resume_state["wandb_run_id"]
+
+    wandb_run = create_wandb_run(
+        enabled=config.logging.wandb,
+        is_main=is_main_process(state),
+        project=config.logging.wandb_project,
+        entity=config.logging.wandb_entity,
+        mode=config.logging.wandb_mode,
+        config=config_to_dict(config),
+        run_name=f"{config.experiment.name}-{experiment_dirs.root.name}",
+        run_dir=experiment_dirs.root,
+        run_id=wandb_run_id,
+    )
+    if is_main_process(state) and wandb_run is not None:
+        wandb_run_id = wandb_run.id
+        wandb_run.config.update({"resolved_config_path": str(experiment_dirs.resolved_config)}, allow_val_change=True)
+        wandb_run.config.update({"experiment": config.experiment.name}, allow_val_change=True)
 
     if state.distributed:
         if state.device.type == "cuda":
@@ -174,6 +181,7 @@ def main() -> None:
         global_step=global_step,
         best_psnr=best_psnr,
         best_ssim=best_ssim,
+        wandb_run_id=wandb_run_id,
     )
 
     try:

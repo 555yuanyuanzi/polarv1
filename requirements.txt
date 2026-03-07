@@ -2,5 +2,6 @@
 # `uv_setup.sh` handles that step for Linux + uv.
 PyYAML>=6.0,<7.0
 Pillow>=10.0,<12.0
+numpy>=1.24,<3.0
 tensorboard>=2.16,<3.0
 wandb>=0.17,<1.0

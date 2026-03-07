@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
+from torch.utils.data import Sampler
 
 
 @dataclass
@@ -75,3 +76,21 @@ def reduce_dict(metrics: dict[str, Any], average: bool = True) -> dict[str, Any]
         else:
             reduced[key] = value
     return reduced
+
+
+class DistributedEvalSampler(Sampler[int]):
+    def __init__(self, dataset, num_replicas: int | None = None, rank: int | None = None) -> None:
+        if num_replicas is None:
+            num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        if rank is None:
+            rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.indices = list(range(rank, len(dataset), num_replicas))
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self) -> int:
+        return len(self.indices)

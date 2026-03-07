@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, TypeVar, get_args, get_origin
+from typing import Any, TypeVar, get_args, get_origin, get_type_hints
 
 import yaml
 
@@ -73,6 +73,7 @@ class RuntimeConfig:
     resume: str = ""
     val_interval: int = 10
     save_interval: int = 50
+    max_steps: int = 0
 
 
 @dataclass
@@ -116,10 +117,12 @@ def _convert_value(field_type: Any, value: Any) -> Any:
 
 def _from_mapping(cls: type[T], mapping: dict[str, Any]) -> T:
     kwargs: dict[str, Any] = {}
+    type_hints = get_type_hints(cls)
     for item in fields(cls):
         if item.name not in mapping:
             continue
-        kwargs[item.name] = _convert_value(item.type, mapping[item.name])
+        field_type = type_hints.get(item.name, item.type)
+        kwargs[item.name] = _convert_value(field_type, mapping[item.name])
     return cls(**kwargs)
 
 

@@ -53,6 +53,7 @@ runtime:
   resume: ""
   val_interval: 1
   save_interval: 1
+  max_steps: 10
 
 logging:
   tensorboard: true

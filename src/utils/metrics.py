@@ -7,7 +7,19 @@ import torch
 import torch.nn.functional as F
 
 
+def _ensure_4d_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.dim() == 3:
+        return tensor.unsqueeze(0)
+    if tensor.dim() == 4:
+        return tensor
+    raise ValueError(f"Expected a 3D or 4D tensor, but got shape {tuple(tensor.shape)}.")
+
+
 def calculate_psnr(prediction: torch.Tensor, target: torch.Tensor, max_val: float = 1.0) -> float:
+    prediction = _ensure_4d_tensor(prediction.float())
+    target = _ensure_4d_tensor(target.float())
+    if prediction.shape != target.shape:
+        raise ValueError(f"Prediction and target shapes must match, got {prediction.shape} vs {target.shape}.")
     mse = F.mse_loss(prediction, target).item()
     if mse <= 1e-12:
         return 100.0
@@ -15,6 +27,10 @@ def calculate_psnr(prediction: torch.Tensor, target: torch.Tensor, max_val: floa
 
 
 def calculate_ssim(prediction: torch.Tensor, target: torch.Tensor, window_size: int = 11, max_val: float = 1.0) -> float:
+    prediction = _ensure_4d_tensor(prediction.float())
+    target = _ensure_4d_tensor(target.float())
+    if prediction.shape != target.shape:
+        raise ValueError(f"Prediction and target shapes must match, got {prediction.shape} vs {target.shape}.")
     c1 = (0.01 * max_val) ** 2
     c2 = (0.03 * max_val) ** 2
 

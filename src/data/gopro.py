@@ -21,11 +21,22 @@ class GoProDataset(Dataset):
             raise FileNotFoundError(
                 f"Expected GoPro layout at {self.blur_dir} and {self.sharp_dir}, but one or both are missing."
             )
-        self.image_names = sorted(
+        blur_names = {
             file.name for file in self.blur_dir.iterdir() if file.suffix.lower() in {".png", ".jpg", ".jpeg"}
-        )
-        if not self.image_names:
+        }
+        sharp_names = {
+            file.name for file in self.sharp_dir.iterdir() if file.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        }
+        if not blur_names:
             raise RuntimeError(f"No images found in {self.blur_dir}.")
+        if blur_names != sharp_names:
+            missing_in_sharp = sorted(blur_names - sharp_names)[:5]
+            missing_in_blur = sorted(sharp_names - blur_names)[:5]
+            raise RuntimeError(
+                "Blur/sharp file lists do not match for split="
+                f"{split}. Missing in sharp: {missing_in_sharp}. Missing in blur: {missing_in_blur}."
+            )
+        self.image_names = sorted(blur_names)
 
     def __len__(self) -> int:
         return len(self.image_names)

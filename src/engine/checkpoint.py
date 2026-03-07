@@ -23,6 +23,7 @@ def save_checkpoint(
     best_psnr: float,
     best_ssim: float,
     main_process: bool,
+    wandb_run_id: str = "",
 ) -> None:
     if not main_process:
         return
@@ -38,6 +39,7 @@ def save_checkpoint(
         "global_step": global_step,
         "best_psnr": best_psnr,
         "best_ssim": best_ssim,
+        "wandb_run_id": wandb_run_id,
         "config": config_to_dict(config),
     }
     torch.save(state, path)
@@ -66,5 +68,6 @@ def load_checkpoint(
         "global_step": int(state.get("global_step", 0)),
         "best_psnr": float(state.get("best_psnr", float("-inf"))),
         "best_ssim": float(state.get("best_ssim", float("-inf"))),
+        "wandb_run_id": str(state.get("wandb_run_id", "")),
         "config": state.get("config", {}),
     }

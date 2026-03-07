@@ -33,6 +33,7 @@ class Trainer:
         global_step: int = 0,
         best_psnr: float = float("-inf"),
         best_ssim: float = float("-inf"),
+        wandb_run_id: str = "",
     ) -> None:
         self.config = config
         self.state = state
@@ -51,6 +52,7 @@ class Trainer:
         self.global_step = global_step
         self.best_psnr = best_psnr
         self.best_ssim = best_ssim
+        self.wandb_run_id = wandb_run_id
         self.pixel_loss = CharbonnierLoss()
         self.frequency_loss = FrequencyLoss()
 
@@ -63,6 +65,7 @@ class Trainer:
             train_metrics = self._train_one_epoch(epoch)
             self.scheduler.step()
             current_lr = self.optimizer.param_groups[0]["lr"]
+            reached_max_steps = self.config.runtime.max_steps > 0 and self.global_step >= self.config.runtime.max_steps
 
             record: dict[str, Any] = {
                 "epoch": epoch + 1,
@@ -75,6 +78,8 @@ class Trainer:
             should_validate = (
                 (epoch + 1) % self.config.runtime.val_interval == 0 or epoch + 1 == self.config.optim.epochs
             )
+            if reached_max_steps:
+                should_validate = True
             if should_validate:
                 raw_metrics = evaluate_model(
                     unwrap_model(self.model),
@@ -112,6 +117,7 @@ class Trainer:
                         self.best_psnr,
                         self.best_ssim,
                         main_process=is_main_process(self.state),
+                        wandb_run_id=self.wandb_run_id,
                     )
                 if ema_metrics["ssim"] > self.best_ssim:
                     self.best_ssim = ema_metrics["ssim"]
@@ -128,6 +134,7 @@ class Trainer:
                         self.best_psnr,
                         self.best_ssim,
                         main_process=is_main_process(self.state),
+                        wandb_run_id=self.wandb_run_id,
                     )
 
             if self.config.logging.save_latest_every_epoch:
@@ -144,6 +151,7 @@ class Trainer:
                     self.best_psnr,
                     self.best_ssim,
                     main_process=is_main_process(self.state),
+                    wandb_run_id=self.wandb_run_id,
                 )
             if (epoch + 1) % self.config.runtime.save_interval == 0:
                 save_checkpoint(
@@ -159,9 +167,14 @@ class Trainer:
                     self.best_psnr,
                     self.best_ssim,
                     main_process=is_main_process(self.state),
+                    wandb_run_id=self.wandb_run_id,
                 )
 
             self._log_epoch(record)
+            if reached_max_steps:
+                if is_main_process(self.state):
+                    self.logger.info("Reached runtime.max_steps=%d, stopping training.", self.config.runtime.max_steps)
+                break
 
     def _train_one_epoch(self, epoch: int) -> dict[str, Any]:
         del epoch
@@ -216,6 +229,9 @@ class Trainer:
                     router_sums["top2_entropy"] += stats["top2_entropy"] * batch_size
                     router_sums["expert_usage"] += stats["expert_usage"] * batch_size
                     router_count += batch_size
+
+            if self.config.runtime.max_steps > 0 and self.global_step >= self.config.runtime.max_steps:
+                break
 
         reduced = reduce_dict(
             {

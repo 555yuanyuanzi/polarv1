@@ -35,6 +35,8 @@ For dataset preparation, 4-GPU launch recommendations, and TensorBoard usage, se
 
 If `logging.wandb=true`, training also mirrors TensorBoard scalars to W&B via `sync_tensorboard=True`.
 
+`configs/debug_v1.yaml` is configured as a smoke test: 10 train steps, then one eval pass and checkpoint save.
+
 ## Environment
 
 Base Python package requirements are listed in `requirements.txt`.

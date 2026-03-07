@@ -58,6 +58,7 @@ def create_wandb_run(
     config: dict[str, Any],
     run_name: str,
     run_dir: str | Path,
+    run_id: str = "",
 ):
     if not enabled or not is_main:
         return None
@@ -74,6 +75,9 @@ def create_wandb_run(
         "sync_tensorboard": True,
         "mode": mode,
     }
+    if run_id:
+        kwargs["id"] = run_id
+        kwargs["resume"] = "allow"
     if entity:
         kwargs["entity"] = entity
     return wandb.init(**kwargs)

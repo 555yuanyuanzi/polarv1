@@ -18,6 +18,19 @@ require_cmd() {
     fi
 }
 
+resolve_abs_path() {
+    local input_path="$1"
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "${input_path}"
+        return
+    fi
+    if command -v readlink >/dev/null 2>&1; then
+        readlink -f "${input_path}"
+        return
+    fi
+    python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${input_path}"
+}
+
 download_file() {
     local url="$1"
     local output="$2"
@@ -76,7 +89,7 @@ flatten_split() {
             [[ -f "${image_path}" ]] || continue
             local image_name
             image_name="$(basename "${image_path}")"
-            ln -sfn "$(realpath "${image_path}")" "${blur_target}/${scene_name}__${image_name}"
+            ln -sfn "$(resolve_abs_path "${image_path}")" "${blur_target}/${scene_name}__${image_name}"
             scene_blur=$((scene_blur + 1))
             total_blur=$((total_blur + 1))
         done
@@ -85,7 +98,7 @@ flatten_split() {
             [[ -f "${image_path}" ]] || continue
             local image_name
             image_name="$(basename "${image_path}")"
-            ln -sfn "$(realpath "${image_path}")" "${sharp_target}/${scene_name}__${image_name}"
+            ln -sfn "$(resolve_abs_path "${image_path}")" "${sharp_target}/${scene_name}__${image_name}"
             scene_sharp=$((scene_sharp + 1))
             total_sharp=$((total_sharp + 1))
         done
