@@ -1,13 +1,17 @@
 experiment:
-  name: polarformer_v1
+  name: polarformer_v1_4xa30
   output_root: v1/outputs
   seed: 42
 
 data:
+  # Example: /data/datasets/gopro_v1/flat
+  # Prepare it with: bash scripts/prepare_gopro.sh /data/datasets/gopro_v1
   root_dir: REPLACE_WITH_GOPRO_ROOT
   train_crop_size: 256
+  # Per-GPU batch size. With 4x A30, total train batch becomes 16.
   batch_size: 4
-  val_batch_size: 4
+  # Validation runs on full-resolution test images, so keep this small.
+  val_batch_size: 1
   num_workers: 4
   pin_memory: true
 

@@ -20,6 +20,8 @@ This directory must not depend on root-level `dataset.py`, `utils.py`, or `model
 - `train.py`: training entrypoint only
 - `eval.py`: checkpoint evaluation only
 - `configs/`: single source of runtime parameters
+- `scripts/`: operational helpers such as dataset preparation
+- `docs/`: operator-facing setup and usage notes
 - `src/config.py`: dataclass schema, YAML loading, validation, resolved config dump
 - `src/data/gopro.py`: GoPro dataset and augmentation
 - `src/models/`: all model code

@@ -12,6 +12,8 @@ This directory is a self-contained implementation of the V1 research model:
 - `train.py`: training entrypoint
 - `eval.py`: checkpoint evaluation entrypoint
 - `configs/`: YAML experiment configs
+- `scripts/`: operational helpers such as dataset preparation
+- `docs/`: setup and usage guides
 - `src/config.py`: config schema and YAML loading
 - `src/data/`: GoPro dataset
 - `src/engine/`: training, evaluation, EMA, checkpoint, optimizer
@@ -26,6 +28,10 @@ Update `data.root_dir` in `configs/gopro_v1.yaml`, then run:
 python v1/train.py --config v1/configs/gopro_v1.yaml
 python v1/eval.py --config v1/configs/gopro_v1.yaml --checkpoint path/to/best_psnr.pth --use-ema
 ```
+
+For dataset preparation, 4-GPU launch recommendations, and TensorBoard usage, see:
+
+- `docs/DATASET_AND_TENSORBOARD.md`
 
 ## Environment
 
