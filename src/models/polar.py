@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .common import window_partition
+from .common import pad_to_multiple, window_partition
 
 
 class LocalPolarPrior(nn.Module):
@@ -37,6 +37,7 @@ class LocalPolarPrior(nn.Module):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = x.shape[0]
         features = self.proj(x)
+        features, _, _ = pad_to_multiple(features, self.window_size)
         windows, hg, wg = window_partition(features, self.window_size)
 
         spectrum = torch.fft.fft2(windows.float(), dim=(-2, -1), norm="ortho")

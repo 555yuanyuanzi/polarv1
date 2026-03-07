@@ -97,3 +97,13 @@ def window_partition(x: torch.Tensor, window_size: int) -> tuple[torch.Tensor, i
         .view(b * hg * wg, c, window_size, window_size)
     )
     return windows, hg, wg
+
+
+def pad_to_multiple(x: torch.Tensor, multiple: int, mode: str = "replicate") -> tuple[torch.Tensor, int, int]:
+    _, _, h, w = x.shape
+    pad_h = (multiple - h % multiple) % multiple
+    pad_w = (multiple - w % multiple) % multiple
+    if pad_h == 0 and pad_w == 0:
+        return x, pad_h, pad_w
+    padded = F.pad(x, (0, pad_w, 0, pad_h), mode=mode)
+    return padded, pad_h, pad_w

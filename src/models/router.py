@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .common import pad_to_multiple
+
 
 class TopKRouter(nn.Module):
     def __init__(
@@ -37,7 +39,8 @@ class TopKRouter(nn.Module):
         confidence: torch.Tensor,
         x: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        context = F.avg_pool2d(x, kernel_size=self.window_size, stride=self.window_size)
+        padded_x, _, _ = pad_to_multiple(x, self.window_size)
+        context = F.avg_pool2d(padded_x, kernel_size=self.window_size, stride=self.window_size)
         context = self.context_proj(context)
         router_input = torch.cat([d_local, confidence, context], dim=1)
 
@@ -47,8 +50,12 @@ class TopKRouter(nn.Module):
         masked_logits.scatter_(1, top_indices, top_values)
         alpha = F.softmax(masked_logits, dim=1)
 
-        alpha_up = F.interpolate(alpha, size=x.shape[-2:], mode="nearest")
-        confidence_up = F.interpolate(confidence, size=x.shape[-2:], mode="nearest")
+        padded_h = d_local.shape[-2] * self.window_size
+        padded_w = d_local.shape[-1] * self.window_size
+        alpha_up = F.interpolate(alpha, size=(padded_h, padded_w), mode="nearest")[..., : x.shape[-2], : x.shape[-1]]
+        confidence_up = F.interpolate(confidence, size=(padded_h, padded_w), mode="nearest")[
+            ..., : x.shape[-2], : x.shape[-1]
+        ]
 
         self.last_stats = {
             "mean_confidence": confidence.mean().detach(),
