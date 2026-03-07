@@ -65,7 +65,10 @@ def main() -> None:
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
         experiment_dirs = load_experiment_dirs(resume_path.resolve().parents[1])
     else:
-        experiment_dirs = create_experiment_dirs(config.experiment.output_root, config.experiment.name)
+        output_root = Path(config.experiment.output_root)
+        if not output_root.is_absolute():
+            output_root = ROOT / output_root
+        experiment_dirs = create_experiment_dirs(str(output_root), config.experiment.name)
 
     logger = create_logger(experiment_dirs.train_log, is_main=is_main_process(state))
     metrics_writer = JsonlWriter(experiment_dirs.metrics_jsonl)

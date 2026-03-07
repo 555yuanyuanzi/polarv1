@@ -81,6 +81,12 @@ class Trainer:
             if reached_max_steps:
                 should_validate = True
             if should_validate:
+                if is_main_process(self.state):
+                    self.logger.info(
+                        "Starting validation for epoch=%d at global_step=%d.",
+                        epoch + 1,
+                        self.global_step,
+                    )
                 raw_metrics = evaluate_model(
                     unwrap_model(self.model),
                     self.val_loader,
@@ -188,7 +194,7 @@ class Trainer:
         }
         router_count = torch.zeros(1, device=self.state.device)
 
-        for blur, sharp in self.train_loader:
+        for step_idx, (blur, sharp) in enumerate(self.train_loader, start=1):
             blur = blur.to(self.state.device, non_blocking=True)
             sharp = sharp.to(self.state.device, non_blocking=True)
             batch_size = blur.size(0)
@@ -229,6 +235,26 @@ class Trainer:
                     router_sums["top2_entropy"] += stats["top2_entropy"] * batch_size
                     router_sums["expert_usage"] += stats["expert_usage"] * batch_size
                     router_count += batch_size
+            else:
+                stats = None
+
+            should_log_step = (
+                is_main_process(self.state)
+                and self.config.logging.log_interval_steps > 0
+                and (
+                    self.global_step % self.config.logging.log_interval_steps == 0
+                    or (
+                        self.config.runtime.max_steps > 0
+                        and self.global_step >= self.config.runtime.max_steps
+                    )
+                )
+            )
+            if should_log_step:
+                self._log_train_step(
+                    step=step_idx,
+                    batch_loss=loss.detach().item(),
+                    stats=stats,
+                )
 
             if self.config.runtime.max_steps > 0 and self.global_step >= self.config.runtime.max_steps:
                 break
@@ -261,6 +287,60 @@ class Trainer:
         else:
             metrics["router"] = {}
         return metrics
+
+    def _log_train_step(self, step: int, batch_loss: float, stats: dict[str, torch.Tensor] | None) -> None:
+        if not is_main_process(self.state):
+            return
+
+        record: dict[str, Any] = {
+            "type": "train_step",
+            "global_step": self.global_step,
+            "step_in_epoch": step,
+            "train_loss": batch_loss,
+            "lr": self.optimizer.param_groups[0]["lr"],
+        }
+        parts = [
+            f"global_step={self.global_step}",
+            f"step_in_epoch={step}",
+            f"train_loss={batch_loss:.6f}",
+            f"lr={record['lr']:.6e}",
+        ]
+        if self.config.logging.log_router_stats and stats:
+            mean_conf = float(stats["mean_confidence"].item())
+            top2_entropy = float(stats["top2_entropy"].item())
+            expert_usage = stats["expert_usage"].detach().cpu().tolist()
+            record.update(
+                {
+                    "router/mean_confidence": mean_conf,
+                    "router/top2_entropy": top2_entropy,
+                    "router/expert_usage_e1": float(expert_usage[0]),
+                    "router/expert_usage_e2": float(expert_usage[1]),
+                    "router/expert_usage_e3": float(expert_usage[2]),
+                    "router/expert_usage_e4": float(expert_usage[3]),
+                }
+            )
+            parts.append(f"router_conf={mean_conf:.4f}")
+            parts.append(f"router_entropy={top2_entropy:.4f}")
+
+        self.logger.info(" | ".join(parts))
+        self.metrics_writer.write(record)
+
+        if self.tensorboard_writer is None:
+            return
+        self.tensorboard_writer.add_scalar("train/step_loss", batch_loss, self.global_step)
+        self.tensorboard_writer.add_scalar("train/lr_step", record["lr"], self.global_step)
+        if self.config.logging.log_router_stats and stats:
+            self.tensorboard_writer.add_scalar(
+                "router/mean_confidence_step",
+                record["router/mean_confidence"],
+                self.global_step,
+            )
+            self.tensorboard_writer.add_scalar(
+                "router/top2_entropy_step",
+                record["router/top2_entropy"],
+                self.global_step,
+            )
+        self.tensorboard_writer.flush()
 
     def _log_epoch(self, record: dict[str, Any]) -> None:
         if not is_main_process(self.state):

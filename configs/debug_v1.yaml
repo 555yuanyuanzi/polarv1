@@ -1,6 +1,6 @@
 experiment:
   name: polarformer_v1_debug
-  output_root: v1/outputs
+  output_root: outputs
   seed: 42
 
 data:
@@ -62,4 +62,5 @@ logging:
   wandb_entity: ""
   wandb_mode: offline
   log_router_stats: true
+  log_interval_steps: 1
   save_latest_every_epoch: true

@@ -84,6 +84,7 @@ class LoggingConfig:
     wandb_entity: str = ""
     wandb_mode: str = "online"
     log_router_stats: bool = True
+    log_interval_steps: int = 50
     save_latest_every_epoch: bool = True
 
 
