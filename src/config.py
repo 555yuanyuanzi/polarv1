@@ -78,6 +78,10 @@ class RuntimeConfig:
 @dataclass
 class LoggingConfig:
     tensorboard: bool = True
+    wandb: bool = False
+    wandb_project: str = "polarformer-v1"
+    wandb_entity: str = ""
+    wandb_mode: str = "online"
     log_router_stats: bool = True
     save_latest_every_epoch: bool = True
 

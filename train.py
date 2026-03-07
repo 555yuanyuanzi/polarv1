@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config import load_config, save_resolved_config
+from src.config import config_to_dict, load_config, save_resolved_config
 from src.data.gopro import GoProDataset
 from src.engine.checkpoint import load_checkpoint
 from src.engine.ema import ModelEMA
@@ -23,7 +23,7 @@ from src.engine.trainer import Trainer
 from src.models import PolarFormer
 from src.utils.distributed import cleanup_distributed, init_distributed_mode, is_main_process
 from src.utils.experiment import create_experiment_dirs, load_experiment_dirs
-from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer
+from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer, create_wandb_run
 from src.utils.seed import set_seed
 
 
@@ -67,6 +67,16 @@ def main() -> None:
 
     logger = create_logger(experiment_dirs.train_log, is_main=is_main_process(state))
     metrics_writer = JsonlWriter(experiment_dirs.metrics_jsonl)
+    wandb_run = create_wandb_run(
+        enabled=config.logging.wandb,
+        is_main=is_main_process(state),
+        project=config.logging.wandb_project,
+        entity=config.logging.wandb_entity,
+        mode=config.logging.wandb_mode,
+        config=config_to_dict(config),
+        run_name=f"{config.experiment.name}-{experiment_dirs.root.name}",
+        run_dir=experiment_dirs.root,
+    )
     tensorboard_writer = create_tensorboard_writer(
         experiment_dirs.tensorboard,
         enabled=config.logging.tensorboard,
@@ -74,6 +84,9 @@ def main() -> None:
     )
     if is_main_process(state):
         save_resolved_config(config, experiment_dirs.resolved_config)
+        if wandb_run is not None:
+            wandb_run.config.update({"resolved_config_path": str(experiment_dirs.resolved_config)}, allow_val_change=True)
+            wandb_run.config.update({"experiment": config.experiment.name}, allow_val_change=True)
 
     logger.info("Experiment directory: %s", experiment_dirs.root)
     logger.info("Loading datasets from %s", config.data.root_dir)
@@ -166,6 +179,8 @@ def main() -> None:
     try:
         trainer.train()
     finally:
+        if wandb_run is not None:
+            wandb_run.finish()
         if tensorboard_writer is not None:
             tensorboard_writer.close()
         cleanup_distributed()

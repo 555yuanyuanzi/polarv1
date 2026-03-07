@@ -221,7 +221,30 @@ Recommended reading:
 - watch whether one expert collapses to near-100% usage
 - watch whether `router/mean_confidence` stays near zero for the whole run, which would indicate the local polar prior is not contributing much
 
-## 10. Common Mistakes
+## 10. W&B Sync
+
+The current V1 integration keeps TensorBoard as the primary logger and mirrors it to W&B.
+
+Config knobs:
+
+- `logging.wandb`
+- `logging.wandb_project`
+- `logging.wandb_entity`
+- `logging.wandb_mode`
+
+Behavior:
+
+- W&B is initialized in `train.py`
+- `sync_tensorboard=True` is used
+- existing TensorBoard scalar writes continue unchanged
+- the main process is the only one that initializes a W&B run
+
+Recommended usage:
+
+- keep `gopro_v1.yaml` on `wandb: true` for formal training
+- keep `debug_v1.yaml` on `wandb: false` or `wandb_mode: offline`
+
+## 11. Common Mistakes
 
 - Pointing `data.root_dir` at `raw/GOPRO_Large` instead of `flat/`
 - Starting TensorBoard from the wrong directory and seeing no runs

@@ -33,6 +33,8 @@ For dataset preparation, 4-GPU launch recommendations, and TensorBoard usage, se
 
 - `docs/DATASET_AND_TENSORBOARD.md`
 
+If `logging.wandb=true`, training also mirrors TensorBoard scalars to W&B via `sync_tensorboard=True`.
+
 ## Environment
 
 Base Python package requirements are listed in `requirements.txt`.

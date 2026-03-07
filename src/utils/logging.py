@@ -46,3 +46,34 @@ def create_tensorboard_writer(log_dir: str | Path, enabled: bool, is_main: bool)
     if not enabled or not is_main or SummaryWriter is None:
         return None
     return SummaryWriter(log_dir=str(log_dir))
+
+
+def create_wandb_run(
+    *,
+    enabled: bool,
+    is_main: bool,
+    project: str,
+    entity: str,
+    mode: str,
+    config: dict[str, Any],
+    run_name: str,
+    run_dir: str | Path,
+):
+    if not enabled or not is_main:
+        return None
+    try:
+        import wandb
+    except ImportError as exc:  # pragma: no cover - depends on optional package
+        raise RuntimeError("W&B logging is enabled but `wandb` is not installed.") from exc
+
+    kwargs = {
+        "project": project,
+        "config": config,
+        "name": run_name,
+        "dir": str(run_dir),
+        "sync_tensorboard": True,
+        "mode": mode,
+    }
+    if entity:
+        kwargs["entity"] = entity
+    return wandb.init(**kwargs)

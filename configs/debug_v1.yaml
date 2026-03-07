@@ -56,5 +56,9 @@ runtime:
 
 logging:
   tensorboard: true
+  wandb: false
+  wandb_project: polarformer-v1
+  wandb_entity: ""
+  wandb_mode: offline
   log_router_stats: true
   save_latest_every_epoch: true
