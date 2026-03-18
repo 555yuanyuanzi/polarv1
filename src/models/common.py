@@ -8,6 +8,8 @@ import torch.nn.functional as F
 
 
 class LayerNormFunction(torch.autograd.Function):
+    """自定义 2D LayerNorm 的底层实现。"""
+
     @staticmethod
     def forward(ctx, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float) -> torch.Tensor:
         ctx.eps = eps
@@ -34,6 +36,8 @@ class LayerNormFunction(torch.autograd.Function):
 
 
 class LayerNorm2d(nn.Module):
+    """对每个空间位置在通道维上做 LayerNorm。"""
+
     def __init__(self, channels: int, eps: float = 1e-6) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(channels))
@@ -45,12 +49,16 @@ class LayerNorm2d(nn.Module):
 
 
 class SimpleGate(nn.Module):
+    """将通道一分为二后做逐元素相乘。"""
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x1, x2 = x.chunk(2, dim=1)
         return x1 * x2
 
 
 class MaskedDWConv2d(nn.Module):
+    """带固定二值掩码的深度可分离卷积。"""
+
     def __init__(self, channels: int, kernel_size: int, mask: torch.Tensor, bias: bool = True) -> None:
         super().__init__()
         self.channels = channels
@@ -67,6 +75,8 @@ class MaskedDWConv2d(nn.Module):
 
 
 def make_direction_masks(kernel_size: int) -> dict[str, torch.Tensor]:
+    """生成水平、垂直、主对角线、副对角线 4 个方向掩码。"""
+
     if kernel_size % 2 == 0:
         raise ValueError("Directional masks require an odd kernel size.")
     center = kernel_size // 2
@@ -85,6 +95,8 @@ def make_direction_masks(kernel_size: int) -> dict[str, torch.Tensor]:
 
 
 def window_partition(x: torch.Tensor, window_size: int) -> tuple[torch.Tensor, int, int]:
+    """按固定窗口大小把特征图切成不重叠窗口。"""
+
     b, c, h, w = x.shape
     if h % window_size != 0 or w % window_size != 0:
         raise ValueError(f"Input spatial size {(h, w)} must be divisible by window_size={window_size}.")
@@ -100,6 +112,8 @@ def window_partition(x: torch.Tensor, window_size: int) -> tuple[torch.Tensor, i
 
 
 def pad_to_multiple(x: torch.Tensor, multiple: int, mode: str = "replicate") -> tuple[torch.Tensor, int, int]:
+    """将空间尺寸补到指定倍数，返回补齐后的张量和 padding 大小。"""
+
     _, _, h, w = x.shape
     pad_h = (multiple - h % multiple) % multiple
     pad_w = (multiple - w % multiple) % multiple

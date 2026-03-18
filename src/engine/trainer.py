@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 from src.config import AppConfig
 from src.engine.checkpoint import save_checkpoint
@@ -11,6 +12,7 @@ from src.engine.evaluator import evaluate_model
 from src.engine.ema import ModelEMA
 from src.losses import CharbonnierLoss, FrequencyLoss
 from src.utils.distributed import DistributedState, is_main_process, reduce_dict, unwrap_model
+from src.utils.logging import log_wandb_checkpoint_artifact
 
 
 class Trainer:
@@ -29,6 +31,7 @@ class Trainer:
         metrics_writer,
         tensorboard_writer,
         experiment_dirs,
+        wandb_run,
         start_epoch: int = 0,
         global_step: int = 0,
         best_psnr: float = float("-inf"),
@@ -48,6 +51,7 @@ class Trainer:
         self.metrics_writer = metrics_writer
         self.tensorboard_writer = tensorboard_writer
         self.experiment_dirs = experiment_dirs
+        self.wandb_run = wandb_run
         self.start_epoch = start_epoch
         self.global_step = global_step
         self.best_psnr = best_psnr
@@ -72,8 +76,10 @@ class Trainer:
                 "train_loss": train_metrics["loss"],
                 "lr": current_lr,
             }
-            if self.config.logging.log_router_stats:
-                record.update(train_metrics["router"])
+            if self.config.logging.log_fbeb_stats:
+                record.update(train_metrics["fbeb"])
+            if self.config.logging.log_importance_stats:
+                record.update(train_metrics["importance"])
 
             should_validate = (
                 (epoch + 1) % self.config.runtime.val_interval == 0 or epoch + 1 == self.config.optim.epochs
@@ -110,8 +116,9 @@ class Trainer:
 
                 if ema_metrics["psnr"] > self.best_psnr:
                     self.best_psnr = ema_metrics["psnr"]
+                    best_psnr_path = self.experiment_dirs.checkpoints / "best_psnr.pth"
                     save_checkpoint(
-                        self.experiment_dirs.checkpoints / "best_psnr.pth",
+                        best_psnr_path,
                         self.config,
                         self.model,
                         self.ema,
@@ -124,11 +131,18 @@ class Trainer:
                         self.best_ssim,
                         main_process=is_main_process(self.state),
                         wandb_run_id=self.wandb_run_id,
+                    )
+                    self._log_checkpoint_artifact(
+                        checkpoint_path=best_psnr_path,
+                        checkpoint_kind="best_psnr",
+                        epoch=epoch + 1,
+                        aliases=["best_psnr"],
                     )
                 if ema_metrics["ssim"] > self.best_ssim:
                     self.best_ssim = ema_metrics["ssim"]
+                    best_ssim_path = self.experiment_dirs.checkpoints / "best_ssim.pth"
                     save_checkpoint(
-                        self.experiment_dirs.checkpoints / "best_ssim.pth",
+                        best_ssim_path,
                         self.config,
                         self.model,
                         self.ema,
@@ -142,10 +156,17 @@ class Trainer:
                         main_process=is_main_process(self.state),
                         wandb_run_id=self.wandb_run_id,
                     )
+                    self._log_checkpoint_artifact(
+                        checkpoint_path=best_ssim_path,
+                        checkpoint_kind="best_ssim",
+                        epoch=epoch + 1,
+                        aliases=["best_ssim"],
+                    )
 
             if self.config.logging.save_latest_every_epoch:
+                latest_path = self.experiment_dirs.checkpoints / "latest.pth"
                 save_checkpoint(
-                    self.experiment_dirs.checkpoints / "latest.pth",
+                    latest_path,
                     self.config,
                     self.model,
                     self.ema,
@@ -159,9 +180,16 @@ class Trainer:
                     main_process=is_main_process(self.state),
                     wandb_run_id=self.wandb_run_id,
                 )
+                self._log_checkpoint_artifact(
+                    checkpoint_path=latest_path,
+                    checkpoint_kind="latest",
+                    epoch=epoch + 1,
+                    aliases=["latest", f"epoch_{epoch + 1:04d}"],
+                )
             if (epoch + 1) % self.config.runtime.save_interval == 0:
+                epoch_path = self.experiment_dirs.checkpoints / f"epoch_{epoch + 1:04d}.pth"
                 save_checkpoint(
-                    self.experiment_dirs.checkpoints / f"epoch_{epoch + 1:04d}.pth",
+                    epoch_path,
                     self.config,
                     self.model,
                     self.ema,
@@ -174,6 +202,12 @@ class Trainer:
                     self.best_ssim,
                     main_process=is_main_process(self.state),
                     wandb_run_id=self.wandb_run_id,
+                )
+                self._log_checkpoint_artifact(
+                    checkpoint_path=epoch_path,
+                    checkpoint_kind="epoch",
+                    epoch=epoch + 1,
+                    aliases=[f"epoch_{epoch + 1:04d}"],
                 )
 
             self._log_epoch(record)
@@ -187,12 +221,22 @@ class Trainer:
         self.model.train()
         loss_sum = torch.zeros(1, device=self.state.device)
         sample_count = torch.zeros(1, device=self.state.device)
-        router_sums = {
-            "mean_confidence": torch.zeros(1, device=self.state.device),
-            "top2_entropy": torch.zeros(1, device=self.state.device),
-            "expert_usage": torch.zeros(4, device=self.state.device),
+        fbeb_sums = {
+            "fbeb/r1": torch.zeros(1, device=self.state.device),
+            "fbeb/r2": torch.zeros(1, device=self.state.device),
+            "fbeb/tau": torch.zeros(1, device=self.state.device),
+            "fbeb/low_energy": torch.zeros(1, device=self.state.device),
+            "fbeb/mid_energy": torch.zeros(1, device=self.state.device),
+            "fbeb/high_energy": torch.zeros(1, device=self.state.device),
         }
-        router_count = torch.zeros(1, device=self.state.device)
+        fbeb_count = torch.zeros(1, device=self.state.device)
+        importance_sums = {
+            "importance/mean": torch.zeros(1, device=self.state.device),
+            "importance/std": torch.zeros(1, device=self.state.device),
+            "importance/high_ratio": torch.zeros(1, device=self.state.device),
+            "importance/raw_gate_mean": torch.zeros(1, device=self.state.device),
+        }
+        importance_count = torch.zeros(1, device=self.state.device)
 
         for step_idx, (blur, sharp) in enumerate(self.train_loader, start=1):
             blur = blur.to(self.state.device, non_blocking=True)
@@ -228,15 +272,23 @@ class Trainer:
             loss_sum += loss.detach() * batch_size
             sample_count += batch_size
 
-            if self.config.logging.log_router_stats:
-                stats = unwrap_model(self.model).get_last_router_stats()
+            model_unwrapped = unwrap_model(self.model)
+            if self.config.logging.log_fbeb_stats:
+                stats = model_unwrapped.get_last_fbeb_stats()
                 if stats:
-                    router_sums["mean_confidence"] += stats["mean_confidence"] * batch_size
-                    router_sums["top2_entropy"] += stats["top2_entropy"] * batch_size
-                    router_sums["expert_usage"] += stats["expert_usage"] * batch_size
-                    router_count += batch_size
+                    for key in fbeb_sums:
+                        fbeb_sums[key] += stats[key] * batch_size
+                    fbeb_count += batch_size
             else:
                 stats = None
+            if self.config.logging.log_importance_stats:
+                importance_stats = model_unwrapped.get_last_importance_stats()
+                if importance_stats:
+                    for key in importance_sums:
+                        importance_sums[key] += importance_stats[key] * batch_size
+                    importance_count += batch_size
+            else:
+                importance_stats = None
 
             should_log_step = (
                 is_main_process(self.state)
@@ -254,7 +306,20 @@ class Trainer:
                     step=step_idx,
                     batch_loss=loss.detach().item(),
                     stats=stats,
+                    importance_stats=importance_stats,
                 )
+
+            should_log_visuals = (
+                is_main_process(self.state)
+                and self.tensorboard_writer is not None
+                and self.config.logging.log_visual_maps
+                and self.config.logging.visual_log_interval_steps > 0
+                and self.global_step % self.config.logging.visual_log_interval_steps == 0
+            )
+            if should_log_visuals:
+                visual_getter = getattr(model_unwrapped, "get_last_visuals", None)
+                if visual_getter is not None:
+                    self._log_visual_maps(visual_getter())
 
             if self.config.runtime.max_steps > 0 and self.global_step >= self.config.runtime.max_steps:
                 break
@@ -263,32 +328,55 @@ class Trainer:
             {
                 "loss_sum": loss_sum,
                 "sample_count": sample_count,
-                "router_mean_confidence_sum": router_sums["mean_confidence"],
-                "router_top2_entropy_sum": router_sums["top2_entropy"],
-                "router_expert_usage_sum": router_sums["expert_usage"],
-                "router_count": router_count,
+                "fbeb_r1_sum": fbeb_sums["fbeb/r1"],
+                "fbeb_r2_sum": fbeb_sums["fbeb/r2"],
+                "fbeb_tau_sum": fbeb_sums["fbeb/tau"],
+                "fbeb_low_energy_sum": fbeb_sums["fbeb/low_energy"],
+                "fbeb_mid_energy_sum": fbeb_sums["fbeb/mid_energy"],
+                "fbeb_high_energy_sum": fbeb_sums["fbeb/high_energy"],
+                "fbeb_count": fbeb_count,
+                "importance_mean_sum": importance_sums["importance/mean"],
+                "importance_std_sum": importance_sums["importance/std"],
+                "importance_high_ratio_sum": importance_sums["importance/high_ratio"],
+                "importance_raw_gate_mean_sum": importance_sums["importance/raw_gate_mean"],
+                "importance_count": importance_count,
             },
             average=False,
         )
 
         total_samples = max(reduced["sample_count"].item(), 1.0)
         metrics: dict[str, Any] = {"loss": reduced["loss_sum"].item() / total_samples}
-        if self.config.logging.log_router_stats and reduced["router_count"].item() > 0:
-            router_total = reduced["router_count"].item()
-            expert_usage = reduced["router_expert_usage_sum"] / router_total
-            metrics["router"] = {
-                "router/mean_confidence": reduced["router_mean_confidence_sum"].item() / router_total,
-                "router/top2_entropy": reduced["router_top2_entropy_sum"].item() / router_total,
-                "router/expert_usage_e1": expert_usage[0].item(),
-                "router/expert_usage_e2": expert_usage[1].item(),
-                "router/expert_usage_e3": expert_usage[2].item(),
-                "router/expert_usage_e4": expert_usage[3].item(),
+        if self.config.logging.log_fbeb_stats and reduced["fbeb_count"].item() > 0:
+            fbeb_total = reduced["fbeb_count"].item()
+            metrics["fbeb"] = {
+                "fbeb/r1": reduced["fbeb_r1_sum"].item() / fbeb_total,
+                "fbeb/r2": reduced["fbeb_r2_sum"].item() / fbeb_total,
+                "fbeb/tau": reduced["fbeb_tau_sum"].item() / fbeb_total,
+                "fbeb/low_energy": reduced["fbeb_low_energy_sum"].item() / fbeb_total,
+                "fbeb/mid_energy": reduced["fbeb_mid_energy_sum"].item() / fbeb_total,
+                "fbeb/high_energy": reduced["fbeb_high_energy_sum"].item() / fbeb_total,
             }
         else:
-            metrics["router"] = {}
+            metrics["fbeb"] = {}
+        if self.config.logging.log_importance_stats and reduced["importance_count"].item() > 0:
+            importance_total = reduced["importance_count"].item()
+            metrics["importance"] = {
+                "importance/mean": reduced["importance_mean_sum"].item() / importance_total,
+                "importance/std": reduced["importance_std_sum"].item() / importance_total,
+                "importance/high_ratio": reduced["importance_high_ratio_sum"].item() / importance_total,
+                "importance/raw_gate_mean": reduced["importance_raw_gate_mean_sum"].item() / importance_total,
+            }
+        else:
+            metrics["importance"] = {}
         return metrics
 
-    def _log_train_step(self, step: int, batch_loss: float, stats: dict[str, torch.Tensor] | None) -> None:
+    def _log_train_step(
+        self,
+        step: int,
+        batch_loss: float,
+        stats: dict[str, torch.Tensor] | None,
+        importance_stats: dict[str, torch.Tensor] | None,
+    ) -> None:
         if not is_main_process(self.state):
             return
 
@@ -305,22 +393,39 @@ class Trainer:
             f"train_loss={batch_loss:.6f}",
             f"lr={record['lr']:.6e}",
         ]
-        if self.config.logging.log_router_stats and stats:
-            mean_conf = float(stats["mean_confidence"].item())
-            top2_entropy = float(stats["top2_entropy"].item())
-            expert_usage = stats["expert_usage"].detach().cpu().tolist()
+        if self.config.logging.log_fbeb_stats and stats:
+            r1 = float(stats["fbeb/r1"].item())
+            r2 = float(stats["fbeb/r2"].item())
+            tau = float(stats["fbeb/tau"].item())
+            low_energy = float(stats["fbeb/low_energy"].item())
+            mid_energy = float(stats["fbeb/mid_energy"].item())
+            high_energy = float(stats["fbeb/high_energy"].item())
             record.update(
                 {
-                    "router/mean_confidence": mean_conf,
-                    "router/top2_entropy": top2_entropy,
-                    "router/expert_usage_e1": float(expert_usage[0]),
-                    "router/expert_usage_e2": float(expert_usage[1]),
-                    "router/expert_usage_e3": float(expert_usage[2]),
-                    "router/expert_usage_e4": float(expert_usage[3]),
+                    "fbeb/r1": r1,
+                    "fbeb/r2": r2,
+                    "fbeb/tau": tau,
+                    "fbeb/low_energy": low_energy,
+                    "fbeb/mid_energy": mid_energy,
+                    "fbeb/high_energy": high_energy,
                 }
             )
-            parts.append(f"router_conf={mean_conf:.4f}")
-            parts.append(f"router_entropy={top2_entropy:.4f}")
+            parts.append(f"fbeb_r1={r1:.4f}")
+            parts.append(f"fbeb_r2={r2:.4f}")
+            parts.append(f"fbeb_tau={tau:.4f}")
+        if self.config.logging.log_importance_stats and importance_stats:
+            imp_mean = float(importance_stats["importance/mean"].item())
+            imp_high = float(importance_stats["importance/high_ratio"].item())
+            raw_gate_mean = float(importance_stats["importance/raw_gate_mean"].item())
+            record.update(
+                {
+                    "importance/mean": imp_mean,
+                    "importance/high_ratio": imp_high,
+                    "importance/raw_gate_mean": raw_gate_mean,
+                }
+            )
+            parts.append(f"imp_mean={imp_mean:.4f}")
+            parts.append(f"imp_high={imp_high:.4f}")
 
         self.logger.info(" | ".join(parts))
         self.metrics_writer.write(record)
@@ -329,15 +434,23 @@ class Trainer:
             return
         self.tensorboard_writer.add_scalar("train/step_loss", batch_loss, self.global_step)
         self.tensorboard_writer.add_scalar("train/lr_step", record["lr"], self.global_step)
-        if self.config.logging.log_router_stats and stats:
+        if self.config.logging.log_fbeb_stats and stats:
+            self.tensorboard_writer.add_scalar("fbeb/r1_step", record["fbeb/r1"], self.global_step)
+            self.tensorboard_writer.add_scalar("fbeb/r2_step", record["fbeb/r2"], self.global_step)
+            self.tensorboard_writer.add_scalar("fbeb/tau_step", record["fbeb/tau"], self.global_step)
+            self.tensorboard_writer.add_scalar("fbeb/low_energy_step", record["fbeb/low_energy"], self.global_step)
+            self.tensorboard_writer.add_scalar("fbeb/mid_energy_step", record["fbeb/mid_energy"], self.global_step)
+            self.tensorboard_writer.add_scalar("fbeb/high_energy_step", record["fbeb/high_energy"], self.global_step)
+        if self.config.logging.log_importance_stats and importance_stats:
+            self.tensorboard_writer.add_scalar("importance/mean_step", record["importance/mean"], self.global_step)
             self.tensorboard_writer.add_scalar(
-                "router/mean_confidence_step",
-                record["router/mean_confidence"],
+                "importance/high_ratio_step",
+                record["importance/high_ratio"],
                 self.global_step,
             )
             self.tensorboard_writer.add_scalar(
-                "router/top2_entropy_step",
-                record["router/top2_entropy"],
+                "importance/raw_gate_mean_step",
+                record["importance/raw_gate_mean"],
                 self.global_step,
             )
         self.tensorboard_writer.flush()
@@ -368,22 +481,74 @@ class Trainer:
             self.tensorboard_writer.add_scalar("val/raw_ssim", record["raw_ssim"], record["epoch"])
             self.tensorboard_writer.add_scalar("val/ema_psnr", record["ema_psnr"], record["epoch"])
             self.tensorboard_writer.add_scalar("val/ema_ssim", record["ema_ssim"], record["epoch"])
-        if self.config.logging.log_router_stats:
-            if "router/mean_confidence" in record:
-                self.tensorboard_writer.add_scalar(
-                    "router/mean_confidence", record["router/mean_confidence"], record["epoch"]
-                )
-                self.tensorboard_writer.add_scalar("router/top2_entropy", record["router/top2_entropy"], record["epoch"])
-                self.tensorboard_writer.add_scalar(
-                    "router/expert_usage_e1", record["router/expert_usage_e1"], record["epoch"]
-                )
-                self.tensorboard_writer.add_scalar(
-                    "router/expert_usage_e2", record["router/expert_usage_e2"], record["epoch"]
-                )
-                self.tensorboard_writer.add_scalar(
-                    "router/expert_usage_e3", record["router/expert_usage_e3"], record["epoch"]
-                )
-                self.tensorboard_writer.add_scalar(
-                    "router/expert_usage_e4", record["router/expert_usage_e4"], record["epoch"]
-                )
+        if self.config.logging.log_fbeb_stats and "fbeb/r1" in record:
+            self.tensorboard_writer.add_scalar("fbeb/r1", record["fbeb/r1"], record["epoch"])
+            self.tensorboard_writer.add_scalar("fbeb/r2", record["fbeb/r2"], record["epoch"])
+            self.tensorboard_writer.add_scalar("fbeb/tau", record["fbeb/tau"], record["epoch"])
+            self.tensorboard_writer.add_scalar("fbeb/low_energy", record["fbeb/low_energy"], record["epoch"])
+            self.tensorboard_writer.add_scalar("fbeb/mid_energy", record["fbeb/mid_energy"], record["epoch"])
+            self.tensorboard_writer.add_scalar("fbeb/high_energy", record["fbeb/high_energy"], record["epoch"])
+        if self.config.logging.log_importance_stats and "importance/mean" in record:
+            self.tensorboard_writer.add_scalar("importance/mean", record["importance/mean"], record["epoch"])
+            self.tensorboard_writer.add_scalar("importance/std", record["importance/std"], record["epoch"])
+            self.tensorboard_writer.add_scalar(
+                "importance/high_ratio",
+                record["importance/high_ratio"],
+                record["epoch"],
+            )
+            self.tensorboard_writer.add_scalar(
+                "importance/raw_gate_mean",
+                record["importance/raw_gate_mean"],
+                record["epoch"],
+            )
         self.tensorboard_writer.flush()
+
+    def _normalize_visual_map(self, tensor: torch.Tensor) -> torch.Tensor:
+        tensor = tensor.detach().float().cpu()
+        if tensor.ndim == 4:
+            tensor = tensor[0]
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0)
+        if tensor.ndim != 3:
+            raise ValueError(f"Expected visual map with 2/3/4 dims, got {tuple(tensor.shape)}.")
+        min_val = tensor.min()
+        max_val = tensor.max()
+        if float((max_val - min_val).item()) < 1e-8:
+            return torch.zeros_like(tensor)
+        return (tensor - min_val) / (max_val - min_val)
+
+    def _log_visual_maps(self, visuals: dict[str, torch.Tensor]) -> None:
+        if not visuals or self.tensorboard_writer is None:
+            return
+        for name, tensor in visuals.items():
+            self.tensorboard_writer.add_image(f"visuals/{name}", self._normalize_visual_map(tensor), self.global_step)
+        self.tensorboard_writer.flush()
+
+    def _log_checkpoint_artifact(
+        self,
+        *,
+        checkpoint_path,
+        checkpoint_kind: str,
+        epoch: int,
+        aliases: list[str],
+    ) -> None:
+        if not is_main_process(self.state):
+            return
+        if self.wandb_run is None or not self.config.logging.wandb_upload_checkpoints:
+            return
+
+        log_wandb_checkpoint_artifact(
+            enabled=True,
+            checkpoint_path=checkpoint_path,
+            artifact_name=f"run-{self.wandb_run_id or self.wandb_run.id}-{checkpoint_kind}",
+            aliases=aliases,
+            metadata={
+                "checkpoint_kind": checkpoint_kind,
+                "epoch": epoch,
+                "global_step": self.global_step,
+                "best_psnr": self.best_psnr,
+                "best_ssim": self.best_ssim,
+                "run_id": self.wandb_run_id or self.wandb_run.id,
+            },
+            file_name=checkpoint_path.name,
+        )

@@ -41,13 +41,16 @@ def build_model(config) -> PolarFormer:
         dec3_base_blocks=config.model.dec3_base_blocks,
         dec2_base_blocks=config.model.dec2_base_blocks,
         dec1_base_blocks=config.model.dec1_base_blocks,
-        polar_window=config.model.polar_window,
-        n_theta=config.model.n_theta,
-        n_r=config.model.n_r,
-        polar_proj_dim=config.model.polar_proj_dim,
-        router_hidden=config.model.router_hidden,
-        router_topk=config.model.router_topk,
         restormer_ffn_expansion=config.model.restormer_ffn_expansion,
+        naf_dw_expand=config.model.naf_dw_expand,
+        naf_ffn_expand=config.model.naf_ffn_expand,
+        fbeb_enabled=config.model.fbeb_enabled,
+        fbeb_stages=tuple(config.model.fbeb_stages),
+        local_refine_enabled=config.model.local_refine_enabled,
+        local_refine_stages=tuple(config.model.local_refine_stages),
+        fbeb_init_r1=config.model.fbeb_init_r1,
+        fbeb_init_r2=config.model.fbeb_init_r2,
+        fbeb_init_tau=config.model.fbeb_init_tau,
     )
 
 

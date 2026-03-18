@@ -1,0 +1,77 @@
+experiment:
+  name: pfv1_dbg_fbeb
+  output_root: outputs
+  seed: 42
+
+data:
+  # Example: /data/datasets/gopro_v1/flat
+  # Prepare it with: bash scripts/prepare_gopro.sh /data/datasets/gopro_v1
+  root_dir: REPLACE_WITH_GOPRO_ROOT
+  train_crop_size: 128
+  batch_size: 1
+  val_batch_size: 1
+  num_workers: 0
+  pin_memory: false
+  train_subset_size: 200
+  val_subset_size: 50
+  subset_seed: 42
+
+model:
+  inp_channels: 3
+  out_channels: 3
+  dim: 48
+  enc_blocks: [3, 4, 6]
+  bottleneck_base_blocks: 3
+  dec3_base_blocks: 2
+  dec2_base_blocks: 2
+  dec1_base_blocks: 3
+  restormer_ffn_expansion: 2.5
+  naf_dw_expand: 2
+  naf_ffn_expand: 3
+  fbeb_enabled: true
+  fbeb_stages: ["bottleneck", "decoder3", "decoder2"]
+  local_refine_enabled: true
+  local_refine_stages: ["decoder3", "decoder2"]
+  fbeb_init_r1: 0.22
+  fbeb_init_r2: 0.58
+  fbeb_init_tau: 0.05
+
+loss:
+  charbonnier_weight: 1.0
+  use_frequency_loss: false
+  frequency_weight: 0.1
+
+optim:
+  lr: 0.0002
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  epochs: 1
+  grad_clip: 1.0
+  ema_decay: 0.999
+
+scheduler:
+  type: cosine
+  eta_min: 0.0000001
+
+runtime:
+  amp: false
+  distributed: false
+  resume: ""
+  val_interval: 1
+  save_interval: 1
+  max_steps: 10
+
+logging:
+  tensorboard: true
+  wandb: false
+  wandb_project: polarformer-v1
+  wandb_entity: "poalrv1"
+  wandb_mode: offline
+  wandb_upload_files: true
+  wandb_upload_checkpoints: true
+  log_fbeb_stats: true
+  log_importance_stats: true
+  log_visual_maps: true
+  log_interval_steps: 1
+  visual_log_interval_steps: 2
+  save_latest_every_epoch: true

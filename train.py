@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
 import torch
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 
 ROOT = Path(__file__).resolve().parent
@@ -23,7 +24,7 @@ from src.engine.trainer import Trainer
 from src.models import PolarFormer
 from src.utils.distributed import DistributedEvalSampler, cleanup_distributed, init_distributed_mode, is_main_process
 from src.utils.experiment import create_experiment_dirs, load_experiment_dirs
-from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer, create_wandb_run
+from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer, create_wandb_run, register_wandb_files
 from src.utils.seed import set_seed
 
 
@@ -43,14 +44,45 @@ def build_model(config) -> PolarFormer:
         dec3_base_blocks=config.model.dec3_base_blocks,
         dec2_base_blocks=config.model.dec2_base_blocks,
         dec1_base_blocks=config.model.dec1_base_blocks,
-        polar_window=config.model.polar_window,
-        n_theta=config.model.n_theta,
-        n_r=config.model.n_r,
-        polar_proj_dim=config.model.polar_proj_dim,
-        router_hidden=config.model.router_hidden,
-        router_topk=config.model.router_topk,
         restormer_ffn_expansion=config.model.restormer_ffn_expansion,
+        naf_dw_expand=config.model.naf_dw_expand,
+        naf_ffn_expand=config.model.naf_ffn_expand,
+        fbeb_enabled=config.model.fbeb_enabled,
+        fbeb_stages=tuple(config.model.fbeb_stages),
+        local_refine_enabled=config.model.local_refine_enabled,
+        local_refine_stages=tuple(config.model.local_refine_stages),
+        fbeb_init_r1=config.model.fbeb_init_r1,
+        fbeb_init_r2=config.model.fbeb_init_r2,
+        fbeb_init_tau=config.model.fbeb_init_tau,
     )
+
+
+def maybe_build_subset(dataset, *, subset_size: int, seed: int, split_name: str, logger):
+    if subset_size <= 0:
+        return dataset
+
+    dataset_size = len(dataset)
+    if subset_size > dataset_size:
+        raise ValueError(
+            f"`data.{split_name}_subset_size={subset_size}` exceeds {split_name} dataset size {dataset_size}."
+        )
+    if subset_size == dataset_size:
+        logger.info(
+            "Using full %s split because subset size equals dataset size: %d.",
+            split_name,
+            dataset_size,
+        )
+        return dataset
+
+    indices = sorted(random.Random(seed).sample(range(dataset_size), subset_size))
+    logger.info(
+        "Using %d/%d samples from %s split with subset_seed=%d.",
+        subset_size,
+        dataset_size,
+        split_name,
+        seed,
+    )
+    return Subset(dataset, indices)
 
 
 def main() -> None:
@@ -92,6 +124,21 @@ def main() -> None:
         root_dir=config.data.root_dir,
         split="test",
         crop_size=config.data.train_crop_size,
+    )
+    subset_seed = config.experiment.seed if config.data.subset_seed < 0 else config.data.subset_seed
+    train_dataset = maybe_build_subset(
+        train_dataset,
+        subset_size=config.data.train_subset_size,
+        seed=subset_seed,
+        split_name="train",
+        logger=logger,
+    )
+    val_dataset = maybe_build_subset(
+        val_dataset,
+        subset_size=config.data.val_subset_size,
+        seed=subset_seed + 1,
+        split_name="val",
+        logger=logger,
     )
 
     train_sampler = DistributedSampler(train_dataset, shuffle=True) if state.distributed else None
@@ -159,6 +206,18 @@ def main() -> None:
         wandb_run_id = wandb_run.id
         wandb_run.config.update({"resolved_config_path": str(experiment_dirs.resolved_config)}, allow_val_change=True)
         wandb_run.config.update({"experiment": config.experiment.name}, allow_val_change=True)
+        register_wandb_files(
+            enabled=config.logging.wandb_upload_files,
+            file_paths=[experiment_dirs.resolved_config],
+            base_path=experiment_dirs.root,
+            policy="now",
+        )
+        register_wandb_files(
+            enabled=config.logging.wandb_upload_files,
+            file_paths=[experiment_dirs.train_log, experiment_dirs.metrics_jsonl],
+            base_path=experiment_dirs.root,
+            policy="live",
+        )
 
     if state.distributed:
         if state.device.type == "cuda":
@@ -180,6 +239,7 @@ def main() -> None:
         metrics_writer=metrics_writer,
         tensorboard_writer=tensorboard_writer,
         experiment_dirs=experiment_dirs,
+        wandb_run=wandb_run,
         start_epoch=start_epoch,
         global_step=global_step,
         best_psnr=best_psnr,
@@ -191,6 +251,12 @@ def main() -> None:
         trainer.train()
     finally:
         if wandb_run is not None:
+            register_wandb_files(
+                enabled=config.logging.wandb_upload_files,
+                file_paths=[experiment_dirs.train_log, experiment_dirs.metrics_jsonl, experiment_dirs.resolved_config],
+                base_path=experiment_dirs.root,
+                policy="now",
+            )
             wandb_run.finish()
         if tensorboard_writer is not None:
             tensorboard_writer.close()

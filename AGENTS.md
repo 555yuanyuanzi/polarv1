@@ -1,42 +1,46 @@
 # V1 Maintenance Context
 
-## 1. Scope
+## Scope
 
-This `v1/` directory is a self-contained research package for single-image motion deblurring on GoPro.
+`v1/` is a self-contained single-image motion deblurring package for GoPro.
 
-Primary goals:
+Current active architecture focus:
 
-- train and evaluate a Hybrid Decoder-Heavy PolarFormer V1
-- keep the V1 research variable focused on `Local Polar -> Router -> Shared + 4 Experts`
-- measure image restoration quality with `PSNR / SSIM`
-- preserve a clean experiment loop with YAML config, EMA, TensorBoard, checkpoint resume, and structured logs
+- hybrid U-shaped backbone
+- `NAFBlock` in encoder and full-resolution decoder
+- `RestormerLiteBlock` in bottleneck and mid-resolution decoders
+- `FBEB` in `decoder3` and `decoder2`
+- `LocalRefinementBlock` after `FBEB` in `decoder3` and `decoder2`
+
+The old `Local Polar -> Router -> Experts` path is no longer part of the active model and has been removed from the code path.
 
 This directory must not depend on root-level `dataset.py`, `utils.py`, or `model_polar.py`.
 
-## 2. Directory Contract
+## Directory Contract
 
-`v1/` is intentionally split by responsibility:
+Keep responsibilities split:
 
 - `train.py`: training entrypoint only
 - `eval.py`: checkpoint evaluation only
-- `configs/`: single source of runtime parameters
-- `scripts/`: operational helpers such as dataset preparation
-- `docs/`: operator-facing setup and usage notes
-- `src/config.py`: dataclass schema, YAML loading, validation, resolved config dump
-- `src/data/gopro.py`: GoPro dataset and augmentation
-- `src/models/`: all model code
-- `src/engine/`: trainer, evaluator, EMA, optimizer, checkpoint logic
-- `src/utils/`: distributed setup, logging, metrics, seed, experiment directory helpers
+- `configs/`: runtime parameters
+- `scripts/`: operational helpers
+- `docs/`: setup and architecture notes
+- `src/config.py`: schema, YAML loading, validation
+- `src/data/`: dataset logic
+- `src/models/`: model code
+- `src/engine/`: trainer, evaluator, checkpoint, optimizer
+- `src/utils/`: logging, metrics, distributed helpers
 
-Do not collapse these layers unless there is a strong maintenance reason.
+## Active Model Definition
 
-## 3. Frozen V1 Model Definition
+Input:
 
-The V1 architecture is fixed unless an explicit architecture change is requested.
+- `B x 3 x H x W`
+- training crop is typically `256 x 256`
+- `H` and `W` must be divisible by `8`
 
 Backbone:
 
-- Input: `B x 3 x H x W`, with `H` and `W` divisible by `8`
 - Patch embed: `3x3 Conv(3 -> 48)`
 - Encoder1: `3 x NAFBlock(48)`
 - Down1 -> `96`
@@ -44,166 +48,101 @@ Backbone:
 - Down2 -> `192`
 - Encoder3: `6 x NAFBlock(192)`
 - Down3 -> `384`
-- Bottleneck: `3 x RestormerLiteBlock(384) + LPEB(384)`
-- Decoder3: `Up3 + Fuse3 + 2 x RestormerLiteBlock(192) + LPEB(192)`
-- Decoder2: `Up2 + Fuse2 + 2 x RestormerLiteBlock(96) + LPEB(96)`
+- Bottleneck: `3 x RestormerLiteBlock(384)`
+- Decoder3: `Up3 + Fuse3 + 2 x RestormerLiteBlock(192) + FBEB(192) + LocalRefinementBlock(192)`
+- Decoder2: `Up2 + Fuse2 + 2 x RestormerLiteBlock(96) + FBEB(96) + LocalRefinementBlock(96)`
 - Decoder1: `Up1 + Fuse1 + 3 x NAFBlock(48)`
 - Output: `3x3 Conv(48 -> 3) + global residual`
 
-Do not:
+Current recommended placement:
 
-- add global polar branches
-- move LPEB into full-resolution decoder
-- change `topk`
-- change expert count
-- silently replace the hybrid backbone
+- `FBEB` in `decoder3` and `decoder2`
+- `LocalRefinementBlock` in `decoder3` and `decoder2`
+- no frequency-domain skip connection yet
 
-If one of these changes is needed, confirm the new research claim first.
+## FBEB Contract
 
-## 4. LPEB Contract
-
-`LPEB` is the core V1 research block.
+`FBEB` is a global frequency-band enhancement block, not an explicit prior estimator.
 
 Input:
 
-- `X in R^(B x C x Hs x Ws)`
+- `X in R^(B x C x H x W)`
 
-Forward order is fixed:
+Core steps:
 
-1. `Xn = LayerNorm2d(X)`
-2. `F_base = SharedExpert(Xn)`
-3. `D_local, c = LocalPolarPrior(Xn)`
-4. `alpha, alpha_up, c_up = TopKRouter(D_local, c, Xn)`
-5. `F1 = ShortIsoExpert(Xn)`
-6. `F2 = LongIsoExpert(Xn)`
-7. `F3 = ShortAnisoExpert(Xn, D_local)`
-8. `F4 = LongAnisoExpert(Xn, D_local)`
-9. `F_local = alpha_up[:,0:1]*F1 + alpha_up[:,1:2]*F2 + alpha_up[:,2:3]*F3 + alpha_up[:,3:4]*F4`
-10. `F_mix = F_base + c_up * F_local`
-11. `Y1 = X + F_mix`
-12. `Y = Y1 + GDFN(LayerNorm2d(Y1))`
+1. `LayerNorm2d`
+2. `FFT2` in `float32`
+3. learnable radial soft masks:
+   - low
+   - mid
+   - high
+4. inverse FFT to spatial domain
+5. per-band SE modulation
+6. `concat`
+7. `1x1 Conv`
+8. `3x3 Conv`
+9. residual add with learnable scaling
 
-Any refactor must preserve this functional contract.
+The mask parameters are stage-local and learnable:
 
-## 5. Local Polar Contract
+- `r1`
+- `r2`
+- `tau`
 
-`LocalPolarPrior` is the only explicit direction prior source in V1.
+They must stay bounded through parameterization.
 
-Fixed hyperparameters:
+## LocalRefinementBlock Contract
 
-- `window_size = 8`
-- `n_theta = 16`
-- `n_r = 8`
-- `polar_proj_dim = 32`
+`LocalRefinementBlock` is the shared local detail restoration block.
 
-Expected shapes:
+Structure:
 
-- input: `Xn in R^(B x C x Hs x Ws)`
-- projected: `Fp in R^(B x 32 x Hs x Ws)`
-- windowed: `B*Nw x 32 x 8 x 8`
-- FFT magnitude: `B*Nw x 32 x 8 x 8`
-- polar resample: `B*Nw x 32 x 8 x 16`
-- direction map: `D_local in R^(B x 16 x Hg x Wg)`
-- confidence map: `c in R^(B x 1 x Hg x Wg)`
-
-Implementation rules:
-
-- use non-overlapping `8x8` windows
-- run FFT in `float32`
-- use inscribed-circle normalized radius
-- aggregate over `channel` and `radius`
-- apply `softmax` over `theta`
-- compute confidence from normalized entropy
-
-Do not average away the `theta` axis.
-
-## 6. Router Contract
-
-`TopKRouter` converts local polar priors into local expert weights.
-
-Inputs:
-
-- `D_local in R^(B x 16 x Hg x Wg)`
-- `c in R^(B x 1 x Hg x Wg)`
-- `S = Conv1x1(AvgPool8(Xn)) in R^(B x 16 x Hg x Wg)`
-
-Router input:
-
-- `R_in = concat(D_local, c, S) in R^(B x 33 x Hg x Wg)`
-
-Router body:
-
-- `1x1 Conv 33 -> 32`
-- `GELU`
+- `LayerNorm2d`
 - `3x3 DWConv`
-- `1x1 Conv 32 -> 4`
+- `1x1 Conv`
+- `GELU`
+- `5x5 DWConv`
+- `1x1 Conv`
+- residual add with learnable scaling
 
-Output:
+Its role is:
 
-- `alpha in R^(B x 4 x Hg x Wg)` after top-2 masked softmax
-- `alpha_up` and `c_up` are nearest-upsampled to `Hs x Ws`
+- local edge refinement
+- local texture repair
+- complement `FBEB` global frequency modulation
 
-The router only controls the 4 local experts.
-It must not gate the shared expert.
+Do not turn it into a routed expert block unless that research claim is explicitly revived.
 
-## 7. Expert Contract
-
-Experts are fixed to:
-
-- `SharedExpert = 2 x NAFBlock(C)`
-- `ShortIsoExpert = 2 x IsoResidualUnit(k=3)`
-- `LongIsoExpert = 2 x IsoResidualUnit(k=7)`
-- `ShortAnisoExpert = 2 x DirectionalBasisMixer(k=5)`
-- `LongAnisoExpert = 2 x DirectionalBasisMixer(k=9)`
-
-`DirectionalBasisMixer` rules:
-
-- direction source is only `D_local`
-- `beta = softmax(Conv1x1(16 -> 4)(D_local), dim=1)`
-- four basis branches:
-  - horizontal
-  - vertical
-  - main diagonal
-  - anti diagonal
-- each branch uses masked depthwise convolution
-- output is weighted sum plus residual
-
-Do not rename these experts into unrelated semantics.
-The V1 interpretation is:
-
-- short vs long range
-- isotropic vs anisotropic
-
-## 8. Config Contract
+## Config Contract
 
 All runtime parameters must come from YAML.
 
-The canonical config file is `configs/gopro_v1.yaml`.
-The smoke config is `configs/debug_v1.yaml`.
+Primary configs currently in use:
 
-`src/config.py` is responsible for:
+- `configs/gopro_fbeb.yaml`
+- `configs/debug_fbeb.yaml`
+
+`src/config.py` remains the only place for:
 
 - schema definition
-- YAML load
-- V1 validation
-- resolved config dump
+- YAML loading
+- validation
 
-Do not hardcode new experiment parameters directly into model or trainer code.
+Do not hardcode experiment parameters in model or trainer code.
 
-## 9. Training Contract
+## Training Contract
 
-Training behavior is fixed to:
+Current training behavior:
 
 - `CharbonnierLoss` enabled by default
-- `FrequencyLoss` implemented but disabled by default
+- `FrequencyLoss` implemented but optional
 - `AdamW`
 - `CosineAnnealingLR`
 - optional AMP
 - EMA validation path
-- raw model and EMA model validation
 - structured JSONL metrics
 - TensorBoard logging
-- resume with optimizer, scheduler, scaler, EMA, best metrics, and global step
+- checkpoint resume with full state
 
 Checkpoint payload must include:
 
@@ -218,16 +157,9 @@ Checkpoint payload must include:
 - `best_ssim`
 - `config`
 
-Only the main process may write:
+## Logging Contract
 
-- checkpoints
-- `train.log`
-- `metrics.jsonl`
-- TensorBoard events
-
-## 10. Logging Contract
-
-Experiment outputs live under:
+Outputs live under:
 
 - `v1/outputs/<exp_name>/<timestamp>/`
 
@@ -240,58 +172,43 @@ Required artifacts:
 - `checkpoints/latest.pth`
 - `checkpoints/best_psnr.pth`
 - `checkpoints/best_ssim.pth`
-- optional `checkpoints/epoch_XXXX.pth`
 
-Router debug metrics must stay available:
+Current module diagnostics should focus on `FBEB`, not router metrics:
 
-- `router/mean_confidence`
-- `router/top2_entropy`
-- `router/expert_usage_e1`
-- `router/expert_usage_e2`
-- `router/expert_usage_e3`
-- `router/expert_usage_e4`
+- `fbeb/r1`
+- `fbeb/r2`
+- `fbeb/tau`
+- `fbeb/low_energy`
+- `fbeb/mid_energy`
+- `fbeb/high_energy`
 
-## 11. Maintenance Rules
+## Maintenance Rules
 
-When modifying `v1/`, keep these rules:
+- prefer small, reversible changes
+- keep model contracts explicit
+- keep docs aligned with active architecture
+- remove dead code when a research direction is abandoned
+- do not silently add back router / experts / local polar
+- if a change affects tensor shapes, update docs at the same time
+- if a change affects logging names, update trainer and operator docs together
 
-- prefer small, local, reversible changes
-- preserve file responsibility boundaries
-- do not silently change research claims while refactoring
-- do not add new model branches without config and documentation updates
-- if an implementation detail is unclear, stop and confirm instead of guessing
-- if a change affects tensor shapes, update the shape comments or docs at the same time
-- if a change affects training state, update checkpoint load/save together
-- if a change affects metrics or logging names, update trainer and docs together
+## Validation Checklist
 
-## 12. Code Style Rules
+Before considering a change complete:
 
-- keep code readable over clever
-- use explicit names for tensor roles
-- keep tensor shape assumptions close to the relevant module
-- avoid broad utility abstractions that hide the model contract
-- use ASCII by default unless there is a strong reason otherwise
-- add comments only where the logic is not obvious
+- run static compile checks over touched files
+- run a model forward smoke test on `128x128` and `256x256`
+- confirm train/eval/checkpoint loop still works
+- confirm checkpoint round-trip restores all states
+- if `FBEB` is enabled, confirm `fbeb/*` stats are logged
 
-## 13. Validation Checklist
+## Current Non-Goals
 
-Before considering a V1 change complete:
+Not part of the active architecture unless explicitly requested:
 
-- run static compile check over `v1/`
-- run module-level shape checks for `LocalPolarPrior`, `TopKRouter`, experts, and `LPEB`
-- run full-model forward smoke test on `128x128` and `256x256`
-- confirm router top-2 sparsity still holds
-- confirm `D_local.sum(dim=1) == 1`
-- confirm `c in [0, 1]`
-- confirm checkpoint round-trip still restores all states
-
-## 14. Common Non-Goals
-
-These are not part of V1 unless explicitly requested:
-
-- global polar prior
-- more than 4 local experts
-- full-resolution LPEB
+- local polar prior
+- top-k router
+- expert mixture branch
+- full-resolution frequency skip connection
 - GAN or perceptual loss by default
-- replacing the hybrid backbone with a fully different family
-- folding root-level legacy code back into `v1/`
+- replacing the hybrid backbone family entirely

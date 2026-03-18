@@ -7,6 +7,13 @@ from .common import LayerNorm2d, SimpleGate
 
 
 class NAFBlock(nn.Module):
+    """
+    轻量局部恢复块。
+
+    主要使用 depthwise conv、SimpleGate 和通道注意力完成高分辨率局部建模，
+    当前用于 encoder 和 decoder1。
+    """
+
     def __init__(self, channels: int, dw_expand: int = 2, ffn_expand: int = 2, drop_out_rate: float = 0.0) -> None:
         super().__init__()
         dw_channels = channels * dw_expand
@@ -33,6 +40,7 @@ class NAFBlock(nn.Module):
         self.gamma = nn.Parameter(torch.zeros((1, channels, 1, 1)), requires_grad=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 第一段：局部卷积 + 门控 + 通道注意力。
         y = self.norm1(x)
         y = self.conv1(y)
         y = self.conv2(y)
@@ -42,6 +50,7 @@ class NAFBlock(nn.Module):
         y = self.dropout1(y)
         x = x + y * self.beta
 
+        # 第二段：轻量 FFN，用于进一步做通道混合。
         y = self.norm2(x)
         y = self.conv4(y)
         y = self.sg(y)

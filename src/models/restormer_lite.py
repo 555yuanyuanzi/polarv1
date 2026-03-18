@@ -8,6 +8,8 @@ from .common import LayerNorm2d
 
 
 class GDFN(nn.Module):
+    """Restormer 中的门控前馈网络。"""
+
     def __init__(self, channels: int, expansion: float = 2.0) -> None:
         super().__init__()
         hidden = int(channels * expansion)
@@ -23,6 +25,8 @@ class GDFN(nn.Module):
 
 
 class MDTA(nn.Module):
+    """带 depthwise conv 预处理的多头注意力。"""
+
     def __init__(self, channels: int, num_heads: int) -> None:
         super().__init__()
         if channels % num_heads != 0:
@@ -35,6 +39,7 @@ class MDTA(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, c, h, w = x.shape
+        # 先生成 q/k/v，再通过 depthwise conv 注入局部空间信息。
         qkv = self.qkv_dwconv(self.qkv(x))
         q, k, v = qkv.chunk(3, dim=1)
 
@@ -53,6 +58,14 @@ class MDTA(nn.Module):
 
 
 class RestormerLiteBlock(nn.Module):
+    """
+    简化版 Restormer block。
+
+    结构：
+    LN -> MDTA -> residual
+    LN -> GDFN -> residual
+    """
+
     def __init__(self, channels: int, num_heads: int, ffn_expansion: float = 2.0) -> None:
         super().__init__()
         self.norm1 = LayerNorm2d(channels)

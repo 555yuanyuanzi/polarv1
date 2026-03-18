@@ -1,11 +1,12 @@
-# Hybrid Decoder-Heavy PolarFormer V1
+# Hybrid Decoder-Heavy Deblurring V1
 
 This directory is a self-contained implementation of the V1 research model:
 
 - Hybrid U-shaped backbone
 - `NAFBlock` in encoder and full-resolution decoder
 - `RestormerLiteBlock` in bottleneck and mid/high-resolution decoders
-- `LPEB`: `Local Polar -> Router -> 1 Shared + 4 Experts`
+- `FBEB` in `decoder3` and `decoder2` for global frequency-band enhancement
+- `LocalRefinementBlock` in `decoder3` and `decoder2` for shared local detail repair
 
 ## Layout
 
@@ -22,11 +23,11 @@ This directory is a self-contained implementation of the V1 research model:
 
 ## Quick Start
 
-Update `data.root_dir` in `configs/gopro_v1.yaml`, then run:
+Update `data.root_dir` in `configs/gopro_fbeb.yaml`, then run:
 
 ```bash
-python v1/train.py --config v1/configs/gopro_v1.yaml
-python v1/eval.py --config v1/configs/gopro_v1.yaml --checkpoint path/to/best_psnr.pth --use-ema
+python v1/train.py --config v1/configs/gopro_fbeb.yaml
+python v1/eval.py --config v1/configs/gopro_fbeb.yaml --checkpoint path/to/best_psnr.pth --use-ema
 ```
 
 For dataset preparation, 4-GPU launch recommendations, and TensorBoard usage, see:
@@ -35,7 +36,7 @@ For dataset preparation, 4-GPU launch recommendations, and TensorBoard usage, se
 
 If `logging.wandb=true`, training also mirrors TensorBoard scalars to W&B via `sync_tensorboard=True`.
 
-`configs/debug_v1.yaml` is configured as a smoke test: 10 train steps, then one eval pass and checkpoint save.
+`configs/debug_fbeb.yaml` is configured as a smoke test: 10 train steps, then one eval pass and checkpoint save.
 
 ## Environment
 
@@ -65,3 +66,4 @@ bash uv_setup.sh cu121 3.11
 - This package does not import root-level `dataset.py`, `utils.py`, or `model_polar.py`.
 - `FrequencyLoss` is implemented but disabled by default.
 - All outputs are written to `v1/outputs/<exp_name>/<timestamp>/`.
+- Legacy `polar/router/experts` modules have been removed from the active code path.

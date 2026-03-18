@@ -36,6 +36,7 @@ class JsonlWriter:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.touch(exist_ok=True)
 
     def write(self, record: dict[str, Any]) -> None:
         with self.path.open("a", encoding="utf-8") as handle:
@@ -81,3 +82,55 @@ def create_wandb_run(
     if entity:
         kwargs["entity"] = entity
     return wandb.init(**kwargs)
+
+
+def register_wandb_files(
+    *,
+    enabled: bool,
+    file_paths: list[str | Path],
+    base_path: str | Path,
+    policy: str,
+) -> None:
+    if not enabled:
+        return
+    try:
+        import wandb
+    except ImportError as exc:  # pragma: no cover - depends on optional package
+        raise RuntimeError("W&B file syncing is enabled but `wandb` is not installed.") from exc
+
+    root = Path(base_path)
+    for file_path in file_paths:
+        path = Path(file_path)
+        if not path.exists():
+            continue
+        wandb.save(str(path), base_path=str(root), policy=policy)
+
+
+def log_wandb_checkpoint_artifact(
+    *,
+    enabled: bool,
+    checkpoint_path: str | Path,
+    artifact_name: str,
+    aliases: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    artifact_type: str = "model",
+    file_name: str | None = None,
+) -> None:
+    if not enabled:
+        return
+    try:
+        import wandb
+    except ImportError as exc:  # pragma: no cover - depends on optional package
+        raise RuntimeError("W&B checkpoint syncing is enabled but `wandb` is not installed.") from exc
+
+    path = Path(checkpoint_path)
+    if not path.exists():
+        return
+
+    active_run = wandb.run
+    if active_run is None:
+        return
+
+    artifact = wandb.Artifact(name=artifact_name, type=artifact_type, metadata=metadata or {})
+    artifact.add_file(str(path), name=file_name or path.name)
+    active_run.log_artifact(artifact, aliases=aliases or [])

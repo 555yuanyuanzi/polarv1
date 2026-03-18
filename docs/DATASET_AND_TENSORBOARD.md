@@ -73,7 +73,7 @@ The script creates:
       sharp/
 ```
 
-After it finishes, set [gopro_v1.yaml](/c:/Users/86155/polar_code/v1/configs/gopro_v1.yaml) `data.root_dir` to:
+After it finishes, set [gopro_fbeb.yaml](/c:/Users/86155/polar_code/v1/configs/gopro_fbeb.yaml) `data.root_dir` to:
 
 ```text
 /data/datasets/gopro_v1/flat
@@ -118,8 +118,26 @@ cd v1
 source .venv/bin/activate
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export OMP_NUM_THREADS=4
-torchrun --standalone --nproc_per_node=4 train.py --config configs/gopro_v1.yaml
+torchrun --standalone --nproc_per_node=4 train.py --config configs/gopro_fbeb.yaml
 ```
+
+Single-GPU launch with conda:
+
+```bash
+cd v1
+bash scripts/train_single_gpu_conda.sh <your_conda_env> configs/gopro_fbeb_single_gpu.yaml
+```
+
+To shorten module ablations, you can limit dataset size from YAML:
+
+```yaml
+data:
+  train_subset_size: 200
+  val_subset_size: 50
+  subset_seed: 42
+```
+
+`0` keeps the full split. The subset selection is deterministic for a fixed seed.
 
 ## 6. Where TensorBoard Logs Are Written
 
@@ -160,15 +178,15 @@ http://127.0.0.1:6006
 ### View one experiment family
 
 ```bash
-tensorboard --logdir v1/outputs/polarformer_v1 --port 6006 --bind_all
+tensorboard --logdir v1/outputs/pfv1_fbeb --port 6006 --bind_all
 ```
 
-This is cleaner when you want to compare only the `polarformer_v1` runs.
+This is cleaner when you want to compare only the current `pfv1_fbeb` runs.
 
 ### View one specific run
 
 ```bash
-tensorboard --logdir v1/outputs/polarformer_v1/<timestamp>/tensorboard --port 6006 --bind_all
+tensorboard --logdir v1/outputs/pfv1_fbeb/<timestamp>/tensorboard --port 6006 --bind_all
 ```
 
 Use this when you only want one run and no cross-run comparison.
@@ -206,20 +224,20 @@ Core curves:
 - `val/ema_psnr`
 - `val/ema_ssim`
 
-Router diagnostics:
+FBEB diagnostics:
 
-- `router/mean_confidence`
-- `router/top2_entropy`
-- `router/expert_usage_e1`
-- `router/expert_usage_e2`
-- `router/expert_usage_e3`
-- `router/expert_usage_e4`
+- `fbeb/r1`
+- `fbeb/r2`
+- `fbeb/tau`
+- `fbeb/low_energy`
+- `fbeb/mid_energy`
+- `fbeb/high_energy`
 
 Recommended reading:
 
 - use `ema_psnr` as the main checkpoint quality signal
-- watch whether one expert collapses to near-100% usage
-- watch whether `router/mean_confidence` stays near zero for the whole run, which would indicate the local polar prior is not contributing much
+- watch whether `fbeb/r1`, `fbeb/r2`, and `fbeb/tau` remain stable during training
+- watch whether one frequency band dominates almost all energy for the whole run
 
 ## 10. W&B Sync
 
@@ -241,13 +259,15 @@ Behavior:
 
 Recommended usage:
 
-- keep `gopro_v1.yaml` on `wandb: true` for formal training
-- keep `debug_v1.yaml` on `wandb: false` or `wandb_mode: offline`
+- keep `gopro_fbeb.yaml` on `wandb: true` for formal training
+- keep `debug_fbeb.yaml` on `wandb: false` or `wandb_mode: offline`
+- with `wandb_upload_files: true`, the run uploads `train.log`, `metrics.jsonl`, and `resolved_config.yaml`
+- with `wandb_upload_checkpoints: true`, the run logs `latest.pth`, `best_psnr.pth`, `best_ssim.pth`, and scheduled `epoch_XXXX.pth` checkpoints as W&B artifacts
 
 ## 11. Common Mistakes
 
 - Pointing `data.root_dir` at `raw/GOPRO_Large` instead of `flat/`
 - Starting TensorBoard from the wrong directory and seeing no runs
-- Using `python train.py` instead of `torchrun` when `distributed: true`
+- Using `python train.py` for a multi-GPU run that is meant to use DDP
 - Setting validation batch too high and hitting OOM on full-resolution test images
 - Comparing only raw-model validation and ignoring EMA

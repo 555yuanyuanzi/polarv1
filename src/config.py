@@ -22,6 +22,9 @@ class DataConfig:
     val_batch_size: int = 4
     num_workers: int = 4
     pin_memory: bool = True
+    train_subset_size: int = 0
+    val_subset_size: int = 0
+    subset_seed: int = -1
 
 
 @dataclass
@@ -34,13 +37,16 @@ class ModelConfig:
     dec3_base_blocks: int = 2
     dec2_base_blocks: int = 2
     dec1_base_blocks: int = 3
-    polar_window: int = 8
-    n_theta: int = 16
-    n_r: int = 8
-    polar_proj_dim: int = 32
-    router_hidden: int = 32
-    router_topk: int = 2
     restormer_ffn_expansion: float = 2.0
+    naf_dw_expand: int = 2
+    naf_ffn_expand: int = 2
+    fbeb_enabled: bool = False
+    fbeb_stages: list[str] = field(default_factory=list)
+    local_refine_enabled: bool = True
+    local_refine_stages: list[str] = field(default_factory=lambda: ["decoder3", "decoder2"])
+    fbeb_init_r1: float = 0.22
+    fbeb_init_r2: float = 0.58
+    fbeb_init_tau: float = 0.05
 
 
 @dataclass
@@ -83,8 +89,13 @@ class LoggingConfig:
     wandb_project: str = "polarformer-v1"
     wandb_entity: str = ""
     wandb_mode: str = "online"
-    log_router_stats: bool = True
+    wandb_upload_files: bool = True
+    wandb_upload_checkpoints: bool = True
+    log_fbeb_stats: bool = True
+    log_importance_stats: bool = True
+    log_visual_maps: bool = True
     log_interval_steps: int = 50
+    visual_log_interval_steps: int = 200
     save_latest_every_epoch: bool = True
 
 
@@ -139,6 +150,10 @@ def load_config(config_path: str | Path) -> AppConfig:
 def validate_config(config: AppConfig) -> None:
     if not config.data.root_dir:
         raise ValueError("`data.root_dir` must be set in the YAML config.")
+    if config.data.train_subset_size < 0 or config.data.val_subset_size < 0:
+        raise ValueError("`data.train_subset_size` and `data.val_subset_size` must be >= 0.")
+    if config.data.subset_seed < -1:
+        raise ValueError("`data.subset_seed` must be >= -1.")
     if config.model.dim != 48:
         raise ValueError("`model.dim` must stay fixed at 48 for V1.")
     if config.model.enc_blocks != [3, 4, 6]:
@@ -147,14 +162,26 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("`model.bottleneck_base_blocks` must stay fixed at 3 for V1.")
     if config.model.dec3_base_blocks != 2 or config.model.dec2_base_blocks != 2 or config.model.dec1_base_blocks != 3:
         raise ValueError("Decoder/base block counts must stay fixed at [2, 2, 3] for V1.")
-    if config.model.router_topk != 2:
-        raise ValueError("`model.router_topk` must stay fixed at 2 for V1.")
-    if config.model.polar_window != 8:
-        raise ValueError("`model.polar_window` must stay fixed at 8 for V1.")
-    if config.model.n_theta != 16 or config.model.n_r != 8 or config.model.polar_proj_dim != 32:
-        raise ValueError("Local polar hyperparameters must stay fixed at n_theta=16, n_r=8, polar_proj_dim=32.")
+    if config.model.naf_dw_expand < 1 or config.model.naf_ffn_expand < 1:
+        raise ValueError("`model.naf_dw_expand` and `model.naf_ffn_expand` must be positive integers.")
+    if config.model.restormer_ffn_expansion <= 0:
+        raise ValueError("`model.restormer_ffn_expansion` must be positive.")
+    if config.model.fbeb_stages:
+        invalid_stages = sorted(set(config.model.fbeb_stages) - {"bottleneck", "decoder3", "decoder2"})
+        if invalid_stages:
+            raise ValueError(f"`model.fbeb_stages` contains invalid stages: {invalid_stages}")
+    if config.model.fbeb_enabled and not config.model.fbeb_stages:
+        raise ValueError("`model.fbeb_enabled=true` requires at least one stage in `model.fbeb_stages`.")
+    if config.model.local_refine_stages:
+        invalid_stages = sorted(set(config.model.local_refine_stages) - {"decoder3", "decoder2"})
+        if invalid_stages:
+            raise ValueError(f"`model.local_refine_stages` contains invalid stages: {invalid_stages}")
+    if config.model.local_refine_enabled and not config.model.local_refine_stages:
+        raise ValueError("`model.local_refine_enabled=true` requires at least one stage in `model.local_refine_stages`.")
     if config.scheduler.type.lower() != "cosine":
         raise ValueError("Only cosine scheduler is supported in V1.")
+    if config.logging.visual_log_interval_steps <= 0:
+        raise ValueError("`logging.visual_log_interval_steps` must be positive.")
 
 
 def config_to_dict(config: AppConfig) -> dict[str, Any]:
