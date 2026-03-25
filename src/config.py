@@ -34,9 +34,9 @@ class ModelConfig:
     dim: int = 48
     enc_blocks: list[int] = field(default_factory=lambda: [3, 4, 6])
     bottleneck_base_blocks: int = 3
-    dec3_base_blocks: int = 2
-    dec2_base_blocks: int = 2
-    dec1_base_blocks: int = 3
+    dec3_base_blocks: int = 3
+    dec2_base_blocks: int = 3
+    dec1_base_blocks: int = 4
     restormer_ffn_expansion: float = 2.0
     naf_dw_expand: int = 2
     naf_ffn_expand: int = 2
@@ -160,8 +160,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("`model.enc_blocks` must stay fixed at [3, 4, 6] for V1.")
     if config.model.bottleneck_base_blocks != 3:
         raise ValueError("`model.bottleneck_base_blocks` must stay fixed at 3 for V1.")
-    if config.model.dec3_base_blocks != 2 or config.model.dec2_base_blocks != 2 or config.model.dec1_base_blocks != 3:
-        raise ValueError("Decoder/base block counts must stay fixed at [2, 2, 3] for V1.")
+    if config.model.dec3_base_blocks != 3 or config.model.dec2_base_blocks != 3 or config.model.dec1_base_blocks != 4:
+        raise ValueError("Decoder/base block counts must stay fixed at [3, 3, 4] for V1.")
     if config.model.naf_dw_expand < 1 or config.model.naf_ffn_expand < 1:
         raise ValueError("`model.naf_dw_expand` and `model.naf_ffn_expand` must be positive integers.")
     if config.model.restormer_ffn_expansion <= 0:

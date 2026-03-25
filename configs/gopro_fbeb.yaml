@@ -19,9 +19,9 @@ model:
   dim: 48
   enc_blocks: [3, 4, 6]
   bottleneck_base_blocks: 3
-  dec3_base_blocks: 2
-  dec2_base_blocks: 2
-  dec1_base_blocks: 3
+  dec3_base_blocks: 3
+  dec2_base_blocks: 3
+  dec1_base_blocks: 4
   restormer_ffn_expansion: 2.5
   naf_dw_expand: 2
   naf_ffn_expand: 3

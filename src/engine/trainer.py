@@ -217,8 +217,10 @@ class Trainer:
                 break
 
     def _train_one_epoch(self, epoch: int) -> dict[str, Any]:
-        del epoch
         self.model.train()
+        epoch_index = epoch + 1
+        total_epochs = self.config.optim.epochs
+        total_iters = len(self.train_loader)
         loss_sum = torch.zeros(1, device=self.state.device)
         sample_count = torch.zeros(1, device=self.state.device)
         fbeb_sums = {
@@ -303,7 +305,10 @@ class Trainer:
             )
             if should_log_step:
                 self._log_train_step(
+                    epoch=epoch_index,
+                    total_epochs=total_epochs,
                     step=step_idx,
+                    total_steps=total_iters,
                     batch_loss=loss.detach().item(),
                     stats=stats,
                     importance_stats=importance_stats,
@@ -372,7 +377,10 @@ class Trainer:
 
     def _log_train_step(
         self,
+        epoch: int,
+        total_epochs: int,
         step: int,
+        total_steps: int,
         batch_loss: float,
         stats: dict[str, torch.Tensor] | None,
         importance_stats: dict[str, torch.Tensor] | None,
@@ -382,14 +390,18 @@ class Trainer:
 
         record: dict[str, Any] = {
             "type": "train_step",
+            "epoch": epoch,
+            "total_epochs": total_epochs,
             "global_step": self.global_step,
             "step_in_epoch": step,
+            "steps_per_epoch": total_steps,
             "train_loss": batch_loss,
             "lr": self.optimizer.param_groups[0]["lr"],
         }
         parts = [
+            f"epoch={epoch}/{total_epochs}",
+            f"iter={step}/{total_steps}",
             f"global_step={self.global_step}",
-            f"step_in_epoch={step}",
             f"train_loss={batch_loss:.6f}",
             f"lr={record['lr']:.6e}",
         ]

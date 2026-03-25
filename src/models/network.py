@@ -10,6 +10,17 @@ from .naf import NAFBlock
 from .restormer_lite import RestormerLiteBlock
 
 
+_VISUAL_FBEb_KEYS = {
+    ("decoder3", "low"),
+    ("decoder3", "high"),
+    ("decoder2", "high"),
+}
+_VISUAL_IMPORTANCE_KEYS = {
+    ("decoder3", "importance"),
+    ("decoder2", "importance"),
+}
+
+
 def _build_naf_stage(
     channels: int,
     num_blocks: int,
@@ -89,9 +100,9 @@ class PolarFormer(nn.Module):
         dim: int = 48,
         enc_blocks: tuple[int, int, int] = (3, 4, 6),
         bottleneck_base_blocks: int = 3,
-        dec3_base_blocks: int = 2,
-        dec2_base_blocks: int = 2,
-        dec1_base_blocks: int = 3,
+        dec3_base_blocks: int = 3,
+        dec2_base_blocks: int = 3,
+        dec1_base_blocks: int = 4,
         restormer_ffn_expansion: float = 2.0,
         naf_dw_expand: int = 2,
         naf_ffn_expand: int = 2,
@@ -291,7 +302,8 @@ class PolarFormer(nn.Module):
             if not stage_visuals:
                 continue
             for key, value in stage_visuals.items():
-                visuals[f"fbeb/{stage_name}_{key}"] = value
+                if (stage_name, key) in _VISUAL_FBEb_KEYS:
+                    visuals[f"fbeb/{stage_name}_{key}"] = value
 
         for stage_name, module in (
             ("decoder3", self.decoder3_importance),
@@ -303,7 +315,8 @@ class PolarFormer(nn.Module):
             if not stage_visuals:
                 continue
             for key, value in stage_visuals.items():
-                visuals[f"importance/{stage_name}_{key}"] = value
+                if (stage_name, key) in _VISUAL_IMPORTANCE_KEYS:
+                    visuals[f"importance/{stage_name}_{key}"] = value
 
         return visuals
 

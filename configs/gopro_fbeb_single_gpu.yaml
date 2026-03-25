@@ -8,12 +8,12 @@ data:
   # Prepare it with: bash scripts/prepare_gopro.sh /data/datasets/gopro_v1
   root_dir: REPLACE_WITH_GOPRO_ROOT
   train_crop_size: 256
-  batch_size: 2
+  batch_size: 4
   val_batch_size: 2
   num_workers: 4
   pin_memory: true
-  train_subset_size: 200
-  val_subset_size: 50
+  train_subset_size: 0
+  val_subset_size: 0
   subset_seed: 42
 
 model:
@@ -22,9 +22,9 @@ model:
   dim: 48
   enc_blocks: [3, 4, 6]
   bottleneck_base_blocks: 3
-  dec3_base_blocks: 2
-  dec2_base_blocks: 2
-  dec1_base_blocks: 3
+  dec3_base_blocks: 3
+  dec2_base_blocks: 3
+  dec1_base_blocks: 4
   restormer_ffn_expansion: 2.5
   naf_dw_expand: 2
   naf_ffn_expand: 3
