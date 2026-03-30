@@ -27,6 +27,56 @@ class FrequencyLoss(nn.Module):
         return F.l1_loss(torch.abs(pred_fft), torch.abs(target_fft))
 
 
+class ImportanceSupervisionLoss(nn.Module):
+    """
+    Lightweight supervision for importance maps.
+
+    The target is built from the current stage reconstruction residual plus a
+    small amount of raw blur-to-sharp prior, then normalized to [0, 1] per
+    sample. Stage predictions are detached when constructing the target so the
+    importance head is not asked to chase a moving gradient through the target.
+    """
+
+    def __init__(self, prior_weight: float = 0.25, eps: float = 1e-6) -> None:
+        super().__init__()
+        if not 0.0 <= prior_weight <= 1.0:
+            raise ValueError("`prior_weight` must be in [0, 1].")
+        self.prior_weight = prior_weight
+        self.eps = eps
+
+    def _resize_image(self, image: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+        if image.shape[-2:] == size:
+            return image.float()
+        return F.interpolate(image.float(), size=size, mode="area")
+
+    def build_target(
+        self,
+        stage_prediction: torch.Tensor,
+        blur: torch.Tensor,
+        sharp: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        size = stage_prediction.shape[-2:]
+        sharp_small = self._resize_image(sharp, size)
+        blur_small = self._resize_image(blur, size)
+        residual = (stage_prediction.float().detach() - sharp_small).abs().mean(dim=1, keepdim=True)
+        prior = (blur_small - sharp_small).abs().mean(dim=1, keepdim=True)
+        target = (1.0 - self.prior_weight) * residual + self.prior_weight * prior
+        max_val = target.amax(dim=(-2, -1), keepdim=True).clamp_min(self.eps)
+        target = (target / max_val).clamp(0.0, 1.0)
+        return target, sharp_small
+
+    def forward(
+        self,
+        importance_map: torch.Tensor,
+        stage_prediction: torch.Tensor,
+        blur: torch.Tensor,
+        sharp: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        target, sharp_small = self.build_target(stage_prediction, blur, sharp)
+        loss = F.smooth_l1_loss(importance_map.float(), target)
+        return loss, target, sharp_small
+
+
 class PolarSpectralLoss(nn.Module):
     """
     极坐标频谱一致性损失。

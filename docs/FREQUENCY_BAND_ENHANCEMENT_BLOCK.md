@@ -7,6 +7,12 @@
 - 模块名：`FrequencyBandEnhancementBlock`
 - 简称：`FBEB`
 
+Current implementation note:
+- The live code has moved to `FBEB-v2`.
+- It still uses learnable radial soft masks parameterized by `r1 / r2 / tau`.
+- After inverse FFT, each band now goes through a band-specific compensation block.
+- The three bands are then reweighted by sample-level `alpha_low / alpha_mid / alpha_high` before fusion.
+
 这个模块的定位是一个**全局频带增强块**，而不是显式的方向先验估计器。
 
 它的目标是：

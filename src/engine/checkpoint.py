@@ -18,7 +18,8 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     scaler: torch.cuda.amp.GradScaler,
-    epoch: int,
+    data_pass: int,
+    step_in_pass: int,
     global_step: int,
     best_psnr: float,
     best_ssim: float,
@@ -35,7 +36,9 @@ def save_checkpoint(
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
         "scaler": scaler.state_dict(),
-        "epoch": epoch,
+        "epoch": data_pass,
+        "data_pass": data_pass,
+        "step_in_pass": step_in_pass,
         "global_step": global_step,
         "best_psnr": best_psnr,
         "best_ssim": best_ssim,
@@ -63,8 +66,11 @@ def load_checkpoint(
         scheduler.load_state_dict(state["scheduler"])
     if scaler is not None:
         scaler.load_state_dict(state["scaler"])
+    data_pass = int(state.get("data_pass", state.get("epoch", 0)))
     return {
-        "epoch": int(state.get("epoch", 0)),
+        "epoch": data_pass,
+        "data_pass": data_pass,
+        "step_in_pass": int(state.get("step_in_pass", 0)),
         "global_step": int(state.get("global_step", 0)),
         "best_psnr": float(state.get("best_psnr", float("-inf"))),
         "best_ssim": float(state.get("best_ssim", float("-inf"))),

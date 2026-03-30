@@ -22,10 +22,16 @@ from src.engine.ema import ModelEMA
 from src.engine.optim import build_optimizer, build_scheduler
 from src.engine.trainer import Trainer
 from src.models import PolarFormer
-from src.utils.distributed import DistributedEvalSampler, cleanup_distributed, init_distributed_mode, is_main_process
+from src.utils.distributed import (
+    DistributedEvalSampler,
+    broadcast_object,
+    cleanup_distributed,
+    init_distributed_mode,
+    is_main_process,
+)
 from src.utils.experiment import create_experiment_dirs, load_experiment_dirs
 from src.utils.logging import JsonlWriter, create_logger, create_tensorboard_writer, create_wandb_run, register_wandb_files
-from src.utils.seed import set_seed
+from src.utils.seed import build_worker_init_fn, set_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,6 +57,7 @@ def build_model(config) -> PolarFormer:
         fbeb_stages=tuple(config.model.fbeb_stages),
         local_refine_enabled=config.model.local_refine_enabled,
         local_refine_stages=tuple(config.model.local_refine_stages),
+        importance_supervision_enabled=config.model.importance_supervision_enabled,
         fbeb_init_r1=config.model.fbeb_init_r1,
         fbeb_init_r2=config.model.fbeb_init_r2,
         fbeb_init_tau=config.model.fbeb_init_tau,
@@ -89,7 +96,7 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     state = init_distributed_mode(config.runtime.distributed)
-    set_seed(config.experiment.seed + state.rank)
+    set_seed(config.experiment.seed)
 
     resume_path = Path(config.runtime.resume) if config.runtime.resume else None
     if resume_path is not None:
@@ -100,7 +107,13 @@ def main() -> None:
         output_root = Path(config.experiment.output_root)
         if not output_root.is_absolute():
             output_root = ROOT / output_root
-        experiment_dirs = create_experiment_dirs(str(output_root), config.experiment.name)
+        if is_main_process(state):
+            experiment_dirs = create_experiment_dirs(str(output_root), config.experiment.name)
+            experiment_root = str(experiment_dirs.root)
+        else:
+            experiment_root = None
+        experiment_root = broadcast_object(experiment_root, src=0)
+        experiment_dirs = load_experiment_dirs(experiment_root)
 
     logger = create_logger(experiment_dirs.train_log, is_main=is_main_process(state))
     metrics_writer = JsonlWriter(experiment_dirs.metrics_jsonl)
@@ -141,8 +154,21 @@ def main() -> None:
         logger=logger,
     )
 
-    train_sampler = DistributedSampler(train_dataset, shuffle=True) if state.distributed else None
+    train_sampler = (
+        DistributedSampler(
+            train_dataset,
+            num_replicas=state.world_size,
+            rank=state.rank,
+            shuffle=True,
+            seed=config.experiment.seed,
+            drop_last=True,
+        )
+        if state.distributed
+        else None
+    )
     val_sampler = DistributedEvalSampler(val_dataset, num_replicas=state.world_size, rank=state.rank) if state.distributed else None
+    train_worker_init_fn = build_worker_init_fn(config.experiment.seed, rank=state.rank)
+    val_worker_init_fn = build_worker_init_fn(config.experiment.seed + 100000, rank=state.rank)
 
     train_loader = DataLoader(
         train_dataset,
@@ -152,6 +178,7 @@ def main() -> None:
         num_workers=config.data.num_workers,
         pin_memory=config.data.pin_memory,
         drop_last=True,
+        worker_init_fn=train_worker_init_fn,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -161,15 +188,23 @@ def main() -> None:
         num_workers=config.data.num_workers,
         pin_memory=config.data.pin_memory,
         drop_last=False,
+        worker_init_fn=val_worker_init_fn,
     )
 
     model = build_model(config).to(state.device)
+    if state.distributed:
+        if state.device.type == "cuda":
+            model = DistributedDataParallel(model, device_ids=[state.local_rank], output_device=state.local_rank)
+        else:
+            model = DistributedDataParallel(model)
+
     ema = ModelEMA(model, decay=config.optim.ema_decay).to(state.device)
     optimizer = build_optimizer(model, config)
     scheduler = build_scheduler(optimizer, config)
     scaler = GradScaler(enabled=config.runtime.amp and state.device.type == "cuda")
 
-    start_epoch = 0
+    start_data_pass = 0
+    start_step_in_pass = 0
     global_step = 0
     best_psnr = float("-inf")
     best_ssim = float("-inf")
@@ -185,11 +220,31 @@ def main() -> None:
             scaler=scaler,
             map_location=state.device,
         )
-        start_epoch = resume_state["epoch"]
+        start_data_pass = resume_state["data_pass"]
+        start_step_in_pass = resume_state["step_in_pass"]
         global_step = resume_state["global_step"]
         best_psnr = resume_state["best_psnr"]
         best_ssim = resume_state["best_ssim"]
         wandb_run_id = resume_state["wandb_run_id"]
+
+    if is_main_process(state):
+        logger.info(
+            "Distributed training: enabled=%s world_size=%d rank=%d local_rank=%d device=%s global_batch=%d",
+            state.distributed,
+            state.world_size,
+            state.rank,
+            state.local_rank,
+            state.device,
+            config.data.batch_size * state.world_size,
+        )
+        logger.info(
+            "Scheduler: type=%s warmup_iterations=%d warmup_start_lr=%.6e eta_min=%.6e total_iterations=%d",
+            config.scheduler.type,
+            config.scheduler.warmup_iterations,
+            config.scheduler.warmup_start_lr,
+            config.scheduler.eta_min,
+            config.optim.total_iterations,
+        )
 
     wandb_run = create_wandb_run(
         enabled=config.logging.wandb,
@@ -219,12 +274,6 @@ def main() -> None:
             policy="live",
         )
 
-    if state.distributed:
-        if state.device.type == "cuda":
-            model = DistributedDataParallel(model, device_ids=[state.local_rank], output_device=state.local_rank)
-        else:
-            model = DistributedDataParallel(model)
-
     trainer = Trainer(
         config=config,
         state=state,
@@ -240,7 +289,8 @@ def main() -> None:
         tensorboard_writer=tensorboard_writer,
         experiment_dirs=experiment_dirs,
         wandb_run=wandb_run,
-        start_epoch=start_epoch,
+        start_data_pass=start_data_pass,
+        start_step_in_pass=start_step_in_pass,
         global_step=global_step,
         best_psnr=best_psnr,
         best_ssim=best_ssim,

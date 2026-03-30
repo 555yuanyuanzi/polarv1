@@ -48,6 +48,7 @@ def build_model(config) -> PolarFormer:
         fbeb_stages=tuple(config.model.fbeb_stages),
         local_refine_enabled=config.model.local_refine_enabled,
         local_refine_stages=tuple(config.model.local_refine_stages),
+        importance_supervision_enabled=config.model.importance_supervision_enabled,
         fbeb_init_r1=config.model.fbeb_init_r1,
         fbeb_init_r2=config.model.fbeb_init_r2,
         fbeb_init_tau=config.model.fbeb_init_tau,

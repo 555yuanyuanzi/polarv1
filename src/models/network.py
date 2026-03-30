@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .fbeb import FrequencyBandEnhancementBlock
 from .importance import RawGuidancePyramid, RestorationImportanceHead
@@ -35,7 +36,11 @@ def _build_naf_stage(
 def _build_restormer_stage(channels: int, num_blocks: int, ffn_expansion: float) -> nn.Sequential:
     """构建由多个 RestormerLiteBlock 组成的 stage。"""
 
-    num_heads = {96: 2, 192: 4, 384: 8}[channels]
+    if channels <= 0:
+        raise ValueError("`channels` must be positive.")
+    target_heads = max(1, round(channels / 48))
+    valid_heads = [heads for heads in range(1, min(channels, 8) + 1) if channels % heads == 0]
+    num_heads = min(valid_heads, key=lambda heads: (abs(heads - target_heads), -heads))
     return nn.Sequential(
         *[RestormerLiteBlock(channels, num_heads=num_heads, ffn_expansion=ffn_expansion) for _ in range(num_blocks)]
     )
@@ -83,6 +88,17 @@ class Fuse(nn.Module):
         return left + right
 
 
+class StagePredictionHead(nn.Module):
+    """Lightweight RGB residual head used only for training-time supervision."""
+
+    def __init__(self, channels: int, out_channels: int) -> None:
+        super().__init__()
+        self.residual = nn.Conv2d(channels, out_channels, kernel_size=3, padding=1, bias=True)
+
+    def forward(self, feature: torch.Tensor, resized_input: torch.Tensor) -> torch.Tensor:
+        return self.residual(feature) + resized_input
+
+
 class PolarFormer(nn.Module):
     """
     当前 V1 的主网络。
@@ -110,13 +126,12 @@ class PolarFormer(nn.Module):
         fbeb_stages: tuple[str, ...] = (),
         local_refine_enabled: bool = True,
         local_refine_stages: tuple[str, ...] = ("decoder3", "decoder2"),
+        importance_supervision_enabled: bool = False,
         fbeb_init_r1: float = 0.22,
         fbeb_init_r2: float = 0.58,
         fbeb_init_tau: float = 0.05,
     ) -> None:
         super().__init__()
-        if dim != 48:
-            raise ValueError("V1 keeps `dim=48` fixed.")
         valid_fbeb_stages = {"bottleneck", "decoder3", "decoder2"}
         valid_local_refine_stages = {"decoder3", "decoder2"}
         if any(stage not in valid_fbeb_stages for stage in fbeb_stages):
@@ -126,6 +141,9 @@ class PolarFormer(nn.Module):
         # FBEB 的启用位置和 local refinement 的启用位置分别独立控制。
         fbeb_stage_set = set(fbeb_stages) if fbeb_enabled else set()
         local_refine_stage_set = set(local_refine_stages) if local_refine_enabled else set()
+        if importance_supervision_enabled and not local_refine_stage_set:
+            raise ValueError("importance supervision requires at least one enabled local refinement stage.")
+        self.importance_supervision_enabled = importance_supervision_enabled
         guide_channels = max(dim // 3, 16)
         self.patch_embed = nn.Conv2d(inp_channels, dim, kernel_size=3, padding=1, bias=True)
         # 从原始模糊图中提取给 decoder2 / decoder3 使用的 raw guidance。
@@ -168,6 +186,11 @@ class PolarFormer(nn.Module):
             if "decoder3" in local_refine_stage_set
             else None
         )
+        self.decoder3_stage_predictor = (
+            StagePredictionHead(dim * 4, out_channels)
+            if importance_supervision_enabled and self.decoder3_importance is not None
+            else None
+        )
         self.decoder3_local_refine = (
             LocalRefinementBlock(dim * 4) if "decoder3" in local_refine_stage_set else nn.Identity()
         )
@@ -190,6 +213,11 @@ class PolarFormer(nn.Module):
             if "decoder2" in local_refine_stage_set
             else None
         )
+        self.decoder2_stage_predictor = (
+            StagePredictionHead(dim * 2, out_channels)
+            if importance_supervision_enabled and self.decoder2_importance is not None
+            else None
+        )
         self.decoder2_local_refine = (
             LocalRefinementBlock(dim * 2) if "decoder2" in local_refine_stage_set else nn.Identity()
         )
@@ -200,11 +228,13 @@ class PolarFormer(nn.Module):
         self.output = nn.Conv2d(dim, out_channels, kernel_size=3, padding=1, bias=True)
         self._last_fbeb_stats: dict[str, torch.Tensor] = {}
         self._last_importance_stats: dict[str, torch.Tensor] = {}
+        self._last_importance_supervision: dict[str, dict[str, torch.Tensor]] = {}
         self._last_visuals: dict[str, torch.Tensor] = {}
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
         if inp.shape[-2] % 8 != 0 or inp.shape[-1] % 8 != 0:
             raise ValueError("Input height and width must be multiples of 8.")
+        self._last_importance_supervision = {}
 
         # raw guidance 从原始模糊图直接提取，后续用于 Importance Head。
         raw_guidance = self.raw_guidance(inp)
@@ -224,6 +254,12 @@ class PolarFormer(nn.Module):
         dec3_fbeb = self.decoder3_fbeb(dec3_stage)
         if self.decoder3_importance is not None:
             dec3_importance = self.decoder3_importance(dec3_stage, dec3_fbeb, raw_guidance["decoder3"])
+            if self.training and self.decoder3_stage_predictor is not None:
+                resized_inp = F.interpolate(inp, size=dec3_fbeb.shape[-2:], mode="area")
+                self._last_importance_supervision["decoder3"] = {
+                    "importance_map": dec3_importance,
+                    "stage_prediction": self.decoder3_stage_predictor(dec3_fbeb, resized_inp),
+                }
             dec3 = self.decoder3_local_refine(dec3_fbeb, importance_map=dec3_importance)
         else:
             dec3 = self.decoder3_local_refine(dec3_fbeb)
@@ -235,6 +271,12 @@ class PolarFormer(nn.Module):
         dec2_fbeb = self.decoder2_fbeb(dec2_stage)
         if self.decoder2_importance is not None:
             dec2_importance = self.decoder2_importance(dec2_stage, dec2_fbeb, raw_guidance["decoder2"])
+            if self.training and self.decoder2_stage_predictor is not None:
+                resized_inp = F.interpolate(inp, size=dec2_fbeb.shape[-2:], mode="area")
+                self._last_importance_supervision["decoder2"] = {
+                    "importance_map": dec2_importance,
+                    "stage_prediction": self.decoder2_stage_predictor(dec2_fbeb, resized_inp),
+                }
             dec2 = self.decoder2_local_refine(dec2_fbeb, importance_map=dec2_importance)
         else:
             dec2 = self.decoder2_local_refine(dec2_fbeb)
@@ -269,6 +311,9 @@ class PolarFormer(nn.Module):
             "fbeb/low_energy": torch.stack([item["low_energy"] for item in stats]).mean(),
             "fbeb/mid_energy": torch.stack([item["mid_energy"] for item in stats]).mean(),
             "fbeb/high_energy": torch.stack([item["high_energy"] for item in stats]).mean(),
+            "fbeb/alpha_low": torch.stack([item["alpha_low"] for item in stats]).mean(),
+            "fbeb/alpha_mid": torch.stack([item["alpha_mid"] for item in stats]).mean(),
+            "fbeb/alpha_high": torch.stack([item["alpha_high"] for item in stats]).mean(),
         }
 
     def _aggregate_importance_stats(self) -> dict[str, torch.Tensor]:
@@ -325,6 +370,12 @@ class PolarFormer(nn.Module):
 
     def get_last_importance_stats(self) -> dict[str, torch.Tensor]:
         return self._last_importance_stats
+
+    def get_last_importance_supervision(self) -> dict[str, dict[str, torch.Tensor]]:
+        return self._last_importance_supervision
+
+    def clear_last_importance_supervision(self) -> None:
+        self._last_importance_supervision = {}
 
     def get_last_visuals(self) -> dict[str, torch.Tensor]:
         return self._last_visuals

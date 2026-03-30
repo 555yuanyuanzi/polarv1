@@ -594,6 +594,13 @@ AdaptiveAvgPool2d(1)
 
 ## 6.11 `FBEB`
 
+Update note:
+- Current implementation is `FBEB-v2`.
+- It keeps the learnable radial `r1 / r2 / tau` split.
+- After inverse FFT, each band now passes through a band-specific compensation block.
+- The block also predicts sample-level redistribution weights `alpha_low / alpha_mid / alpha_high` before fusion.
+- Existing output shape and residual interface stay unchanged.
+
 文件：
 - [fbeb.py](/c:/Users/86155/polar_code/v1/src/models/fbeb.py)
 
@@ -696,6 +703,9 @@ y = x + \gamma_f \cdot \Delta_f
 - `low_energy`
 - `mid_energy`
 - `high_energy`
+- `alpha_low`
+- `alpha_mid`
+- `alpha_high`
 - `low / mid / high` 可视化图
 
 ---
@@ -798,6 +808,8 @@ D = \sigma(\text{Conv}_{1 \times 1}(\text{DWConv}(h')))
 - `importance/std`
 - `importance/high_ratio`
 - `importance/raw_gate_mean`
+- `importance_sup/map_loss`
+- `importance_sup/aux_loss`
 
 其中：
 
@@ -806,6 +818,12 @@ importance\_high\_ratio = \text{mean}(D > 0.6)
 \]
 
 这只是诊断指标，不是监督标签。
+
+当前实现还支持一个训练期可选的轻量 importance supervision：
+- 仅在 `decoder3 / decoder2` 上启用
+- 仅增加一个 `3x3 Conv -> RGB residual` 的 stage 预测头
+- 用当前 stage 粗恢复残差和少量 `blur-sharp` 先验构造 supervision target
+- 推理时不会走这条辅助监督路径
 
 ### 训练期可视化
 
@@ -922,6 +940,9 @@ RestormerLite stage
 - `fbeb/low_energy`
 - `fbeb/mid_energy`
 - `fbeb/high_energy`
+- `fbeb/alpha_low`
+- `fbeb/alpha_mid`
+- `fbeb/alpha_high`
 
 ### Importance
 
@@ -979,4 +1000,3 @@ RestormerLite stage
 当前这版模型可以概括为：
 
 > 一个 hybrid U-Net 去模糊网络。编码器和最后一层解码器使用 `NAFBlock` 做轻量局部建模；bottleneck、decoder3、decoder2 使用 `RestormerLiteBlock` 做更强的上下文恢复；在 bottleneck / decoder3 / decoder2 上引入 `FBEB` 做低中高频重加权；在 decoder3 / decoder2 上再通过 `RawGuidancePyramid + RestorationImportanceHead` 生成局部恢复重要性图，用它调制 `LocalRefinementBlock` 的局部修复强度，最后输出 RGB 残差并加回输入图。
-

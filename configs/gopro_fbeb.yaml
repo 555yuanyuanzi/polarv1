@@ -1,3 +1,6 @@
+# CUDA_VISIBLE_DEVICES=0,1 bash scripts/train_multi_gpu_conda.sh my_pytorch configs/gopro_fbeb.yaml
+
+
 experiment:
   name: pfv1_fbeb
   output_root: outputs
@@ -18,7 +21,7 @@ model:
   out_channels: 3
   dim: 48
   enc_blocks: [3, 4, 6]
-  bottleneck_base_blocks: 3
+  bottleneck_base_blocks: 6
   dec3_base_blocks: 3
   dec2_base_blocks: 3
   dec1_base_blocks: 4
@@ -29,6 +32,7 @@ model:
   fbeb_stages: ["bottleneck", "decoder3", "decoder2"]
   local_refine_enabled: true
   local_refine_stages: ["decoder3", "decoder2"]
+  importance_supervision_enabled: false
   fbeb_init_r1: 0.22
   fbeb_init_r2: 0.58
   fbeb_init_tau: 0.05
@@ -37,31 +41,37 @@ loss:
   charbonnier_weight: 1.0
   use_frequency_loss: false
   frequency_weight: 0.1
+  importance_supervision_weight: 0.05
+  importance_aux_weight: 0.02
+  importance_prior_weight: 0.25
 
 optim:
   lr: 0.0002
   weight_decay: 0.0001
   betas: [0.9, 0.999]
-  epochs: 300
+  total_iterations: 600000
   grad_clip: 1.0
   ema_decay: 0.999
 
 scheduler:
   type: cosine
   eta_min: 0.0000001
+  warmup_iterations: 5000
+  warmup_start_lr: 0.000001
 
 runtime:
   amp: true
   distributed: true
+  num_gpu: 2
   resume: ""
-  val_interval: 25
-  save_interval: 50
+  val_interval_steps: 10000
+  save_interval_steps: 50000
 
 logging:
   tensorboard: true
   wandb: true
   wandb_project: polarformer-v1
-  wandb_entity: "poalrv1"
+  wandb_entity: "FFEB"
   wandb_mode: online
   wandb_upload_files: true
   wandb_upload_checkpoints: true
@@ -70,4 +80,4 @@ logging:
   log_visual_maps: true
   log_interval_steps: 50
   visual_log_interval_steps: 200
-  save_latest_every_epoch: true
+  save_latest_interval_steps: 5000

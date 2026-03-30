@@ -54,6 +54,14 @@ def synchronize() -> None:
         dist.barrier()
 
 
+def broadcast_object(value: Any, src: int = 0) -> Any:
+    if not (dist.is_available() and dist.is_initialized()):
+        return value
+    objects = [value]
+    dist.broadcast_object_list(objects, src=src)
+    return objects[0]
+
+
 def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     return model.module if hasattr(model, "module") else model
 
