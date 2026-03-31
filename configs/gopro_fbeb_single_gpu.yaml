@@ -39,7 +39,7 @@ model:
 
 loss:
   charbonnier_weight: 1.0
-  use_frequency_loss: false
+  use_frequency_loss: true
   frequency_weight: 0.1
   importance_supervision_weight: 0.05
   importance_aux_weight: 0.02
@@ -64,7 +64,7 @@ runtime:
   distributed: false
   num_gpu: 1
   resume: ""
-  val_interval_steps: 10000
+  val_interval_steps: 50000
   save_interval_steps: 50000
 
 logging:
@@ -79,5 +79,5 @@ logging:
   log_importance_stats: true
   log_visual_maps: true
   log_interval_steps: 50
-  visual_log_interval_steps: 200
+  visual_log_interval_steps: 5000
   save_latest_interval_steps: 5000
