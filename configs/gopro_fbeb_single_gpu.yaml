@@ -42,6 +42,8 @@ loss:
   charbonnier_weight: 1.0
   use_frequency_loss: true
   frequency_weight: 0.1
+  use_polar_spectral_loss: true
+  polar_spectral_weight: 0.1
   importance_supervision_weight: 0.05
   importance_aux_weight: 0.02
   importance_prior_weight: 0.25

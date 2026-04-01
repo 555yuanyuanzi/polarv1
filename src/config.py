@@ -56,6 +56,8 @@ class LossConfig:
     charbonnier_weight: float = 1.0
     use_frequency_loss: bool = False
     frequency_weight: float = 0.1
+    use_polar_spectral_loss: bool = False
+    polar_spectral_weight: float = 0.1
     importance_supervision_weight: float = 0.05
     importance_aux_weight: float = 0.02
     importance_prior_weight: float = 0.25
@@ -200,6 +202,8 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("`model.importance_supervision_enabled=true` requires `model.local_refine_enabled=true`.")
     if not (0.0 <= config.loss.importance_prior_weight <= 1.0):
         raise ValueError("`loss.importance_prior_weight` must be in [0, 1].")
+    if config.loss.frequency_weight < 0.0 or config.loss.polar_spectral_weight < 0.0:
+        raise ValueError("`loss.frequency_weight` and `loss.polar_spectral_weight` must be >= 0.")
     if config.loss.importance_supervision_weight < 0.0 or config.loss.importance_aux_weight < 0.0:
         raise ValueError("`loss.importance_supervision_weight` and `loss.importance_aux_weight` must be >= 0.")
     if config.optim.total_iterations <= 0:

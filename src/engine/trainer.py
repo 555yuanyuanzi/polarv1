@@ -9,7 +9,7 @@ from src.config import AppConfig
 from src.engine.checkpoint import save_checkpoint
 from src.engine.evaluator import evaluate_model
 from src.engine.ema import ModelEMA
-from src.losses import CharbonnierLoss, FrequencyLoss, ImportanceSupervisionLoss
+from src.losses import CharbonnierLoss, FrequencyLoss, ImportanceSupervisionLoss, PolarSpectralLoss
 from src.utils.distributed import DistributedState, is_main_process, reduce_dict, unwrap_model
 from src.utils.logging import log_wandb_checkpoint_artifact
 
@@ -60,6 +60,7 @@ class Trainer:
         self.wandb_run_id = wandb_run_id
         self.pixel_loss = CharbonnierLoss()
         self.frequency_loss = FrequencyLoss()
+        self.polar_spectral_loss = PolarSpectralLoss()
         self.importance_supervision_loss = ImportanceSupervisionLoss(
             prior_weight=config.loss.importance_prior_weight
         )
@@ -155,6 +156,8 @@ class Trainer:
                     loss = self.config.loss.charbonnier_weight * self.pixel_loss(output, sharp)
                     if self.config.loss.use_frequency_loss:
                         loss = loss + self.config.loss.frequency_weight * self.frequency_loss(output, sharp)
+                    if self.config.loss.use_polar_spectral_loss:
+                        loss = loss + self.config.loss.polar_spectral_weight * self.polar_spectral_loss(output, sharp)
                     importance_supervision = self._compute_importance_supervision(model_unwrapped, blur, sharp)
                     if importance_supervision is not None:
                         loss = loss + importance_supervision["total"]
