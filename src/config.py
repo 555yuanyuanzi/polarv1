@@ -18,6 +18,7 @@ class ExperimentConfig:
 class DataConfig:
     root_dir: str = ""
     train_crop_size: int = 256
+    random_rot90: bool = False
     batch_size: int = 4
     val_batch_size: int = 4
     num_workers: int = 4

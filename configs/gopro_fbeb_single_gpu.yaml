@@ -8,6 +8,7 @@ data:
   # Prepare it with: bash scripts/prepare_gopro.sh /data/datasets/gopro_v1
   root_dir: REPLACE_WITH_GOPRO_ROOT
   train_crop_size: 256
+  random_rot90: true
   batch_size: 4
   val_batch_size: 2
   num_workers: 4
@@ -49,7 +50,7 @@ optim:
   lr: 0.0002
   weight_decay: 0.0001
   betas: [0.9, 0.999]
-  total_iterations: 600000
+  total_iterations: 300000
   grad_clip: 1.0
   ema_decay: 0.999
 

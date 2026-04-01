@@ -8,6 +8,7 @@ data:
   # Prepare it with: bash scripts/prepare_gopro.sh /data/datasets/gopro_v1
   root_dir: REPLACE_WITH_GOPRO_ROOT
   train_crop_size: 128
+  random_rot90: true
   batch_size: 1
   val_batch_size: 1
   num_workers: 0

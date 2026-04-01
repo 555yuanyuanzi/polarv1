@@ -132,6 +132,7 @@ def main() -> None:
         root_dir=config.data.root_dir,
         split="train",
         crop_size=config.data.train_crop_size,
+        random_rot90=config.data.random_rot90,
     )
     val_dataset = GoProDataset(
         root_dir=config.data.root_dir,

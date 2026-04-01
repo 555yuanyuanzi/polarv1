@@ -10,11 +10,18 @@ import torchvision.transforms.functional as TF
 
 
 class GoProDataset(Dataset):
-    def __init__(self, root_dir: str, split: str = "train", crop_size: int = 256) -> None:
+    def __init__(
+        self,
+        root_dir: str,
+        split: str = "train",
+        crop_size: int = 256,
+        random_rot90: bool = False,
+    ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
         self.split = split
         self.crop_size = crop_size
+        self.random_rot90 = random_rot90
         self.blur_dir = self.root_dir / split / "blur"
         self.sharp_dir = self.root_dir / split / "sharp"
         if not self.blur_dir.exists() or not self.sharp_dir.exists():
@@ -49,6 +56,7 @@ class GoProDataset(Dataset):
         if self.split == "train":
             blur, sharp = self._random_crop_pair(blur, sharp)
             blur, sharp = self._random_flip_pair(blur, sharp)
+            blur, sharp = self._random_rot90_pair(blur, sharp)
         else:
             blur, sharp = self._center_crop_pair_to_multiple(blur, sharp, multiple=8)
 
@@ -71,6 +79,14 @@ class GoProDataset(Dataset):
         if random.random() > 0.5:
             blur, sharp = TF.vflip(blur), TF.vflip(sharp)
         return blur, sharp
+
+    def _random_rot90_pair(self, blur: Image.Image, sharp: Image.Image) -> tuple[Image.Image, Image.Image]:
+        if not self.random_rot90:
+            return blur, sharp
+        angle = random.choice((0, 90, 180, 270))
+        if angle == 0:
+            return blur, sharp
+        return TF.rotate(blur, angle), TF.rotate(sharp, angle)
 
     def _center_crop_pair_to_multiple(
         self,
