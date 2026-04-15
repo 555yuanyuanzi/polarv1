@@ -1,4 +1,4 @@
-﻿# ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
 # Copyright (c) 2022 megvii-model. All Rights Reserved.
 # ------------------------------------------------------------------------
 
@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from basicsr.models.archs.arch_util import LayerNorm2d
 from basicsr.models.archs.local_arch import Local_Base
 from basicsr.models.fbeb import FrequencyBandEnhancementBlock
+from basicsr.models.GDPM import GlobalDirectionalPriorModulation
 
 class SimpleGate(nn.Module):
     def forward(self, x):
@@ -83,13 +84,39 @@ class NAFBlock(nn.Module):
 
 class NAFNet(nn.Module):
 
-    def __init__(self, img_channel=3, width=16, middle_blk_num=1, enc_blk_nums=[], dec_blk_nums=[]):
+    def __init__(
+        self,
+        img_channel=3,
+        width=16,
+        middle_blk_num=1,
+        enc_blk_nums=[],
+        dec_blk_nums=[],
+        use_gdpm=True,
+        gdpm_prior_size=64,
+        gdpm_num_dirs=4,
+        gdpm_r_min_ratio=0.15,
+        gdpm_mlp_hidden=32,
+        gdpm_use_grayscale=True,
+    ):
         super().__init__()
 
         self.intro = nn.Conv2d(in_channels=img_channel, out_channels=width, kernel_size=3, padding=1, stride=1, groups=1,
                               bias=True)
         self.ending = nn.Conv2d(in_channels=width, out_channels=img_channel, kernel_size=3, padding=1, stride=1, groups=1,
                               bias=True)
+        self.input_gdpm = (
+            GlobalDirectionalPriorModulation(
+                feat_channels=width,
+                in_channels=img_channel,
+                prior_size=gdpm_prior_size,
+                num_dirs=gdpm_num_dirs,
+                r_min_ratio=gdpm_r_min_ratio,
+                mlp_hidden=gdpm_mlp_hidden,
+                use_grayscale=gdpm_use_grayscale,
+            )
+            if use_gdpm
+            else None
+        )
 
         self.encoders = nn.ModuleList()
         self.decoders = nn.ModuleList()
@@ -141,6 +168,8 @@ class NAFNet(nn.Module):
         inp = self.check_image_size(inp)
 
         x = self.intro(inp)
+        if self.input_gdpm is not None:
+            x = self.input_gdpm(inp, x)
 
         encs = []
 
@@ -209,4 +238,5 @@ if __name__ == '__main__':
     macs = float(macs[:-4])
 
     print(macs, params)
+
 
